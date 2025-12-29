@@ -32,27 +32,45 @@ class CompositorAgent:
         chars_per_line = max(1, int(max_width / avg_char_width))
         return textwrap.fill(text, width=chars_per_line)
 
-    def draw_speech_bubble(self, draw, text, position):
-        """Draws a rounded speech bubble with wrapped text."""
-        x, y = position
+    def draw_speech_bubble(self, draw, text, panel_rect, position_code="top-left"):
+        """Draws a rounded speech bubble with wrapped text positioned dynamically."""
+        panel_x, panel_y, panel_w, panel_h = panel_rect
         wrapped_text = self.wrap_text(text, 500)
         
-        # Calculate text size for bubble dimensions
-        bbox = draw.multiline_textbbox((x, y), wrapped_text, font=self.font)
-        padding = 20
-        bubble_rect = [bbox[0]-padding, bbox[1]-padding, bbox[2]+padding, bbox[3]+padding]
+        # Calculate text size
+        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=self.font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
         
-        # Draw bubble background (White with black outline)
+        padding = 20
+        bubble_w = text_w + (padding * 2)
+        bubble_h = text_h + (padding * 2)
+        
+        # Determine coordinates based on position_code
+        # Default margin from panel edges
+        edge_margin = 40 
+        
+        if position_code == "top-right":
+            x = panel_x + panel_w - bubble_w - edge_margin
+            y = panel_y + edge_margin
+        elif position_code == "bottom-left":
+            x = panel_x + edge_margin
+            y = panel_y + panel_h - bubble_h - edge_margin
+        elif position_code == "bottom-right":
+            x = panel_x + panel_w - bubble_w - edge_margin
+            y = panel_y + panel_h - bubble_h - edge_margin
+        else: # top-left (default)
+            x = panel_x + edge_margin
+            y = panel_y + edge_margin
+
+        # Draw bubble background
+        bubble_rect = [x, y, x + bubble_w, y + bubble_h]
         draw.rounded_rectangle(bubble_rect, radius=15, fill="white", outline="black", width=3)
         
-        # Draw the tail of the bubble (a small triangle)
-        tail_coords = [(bubble_rect[0]+20, bubble_rect[3]), (bubble_rect[0]+40, bubble_rect[3]+30), (bubble_rect[0]+60, bubble_rect[3])]
-        draw.polygon(tail_coords, fill="white", outline="black")
-        # Overwrite the outline on the top of the tail to merge with the bubble
-        draw.line([(tail_coords[0][0]+2, tail_coords[0][1]), (tail_coords[2][0]-2, tail_coords[2][1])], fill="white", width=4)
-
-        # Draw the text
-        draw.multiline_text((x, y), wrapped_text, font=self.font, fill="black")
+        # Draw text centered in bubble
+        text_x = x + padding
+        text_y = y + padding
+        draw.multiline_text((text_x, text_y), wrapped_text, font=self.font, fill="black")
 
     def assemble_page(self, page_data):
         page_num = page_data['page_number']
@@ -88,10 +106,12 @@ class CompositorAgent:
             # Paste the panel
             canvas.paste(panel_img, (pos_x, pos_y))
             
-            # Draw the dialogue bubble (Positioned at the top-left of the panel)
-            if panel['dialogue']:
-                bubble_pos = (pos_x + 40, pos_y + 40)
-                self.draw_speech_bubble(draw, panel['dialogue'], bubble_pos)
+            # Draw the dialogue bubble
+            if panel.get('dialogue'):
+                # Get preferred position from JSON, default to top-left
+                pos_code = panel.get('bubble_position', 'top-left')
+                panel_rect = (pos_x, pos_y, panel_w, panel_h)
+                self.draw_speech_bubble(draw, panel['dialogue'], panel_rect, pos_code)
 
         # Save the final page
         output_path = self.output_dir / f"page_{page_num}.png"

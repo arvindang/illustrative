@@ -47,6 +47,7 @@ class ScriptingAgent:
         1. visual_description: A detailed prompt for an AI image generator.
         2. dialogue: The text to appear in speech bubbles.
         3. character_presence: A list of main characters in the panel.
+        4. bubble_position: Best location for text ("top-left", "top-right", "bottom-left", "bottom-right") to avoid covering faces/action.
 
         OUTPUT FORMAT: Provide only valid JSON.
         """
@@ -70,9 +71,10 @@ class ScriptingAgent:
                                         "panel_id": {"type": "INTEGER"},
                                         "visual_description": {"type": "STRING"},
                                         "dialogue": {"type": "STRING"},
-                                        "characters": {"type": "ARRAY", "items": {"type": "STRING"}}
+                                        "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                        "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
                                     },
-                                    "required": ["panel_id", "visual_description", "dialogue", "characters"]
+                                    "required": ["panel_id", "visual_description", "dialogue", "characters", "bubble_position"]
                                 }
                             }
                         },
