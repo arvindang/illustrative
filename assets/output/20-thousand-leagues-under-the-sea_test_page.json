@@ -1,0 +1,60 @@
+[
+  {
+    "page_number": 1,
+    "panels": [
+      {
+        "panel_id": 1,
+        "visual_description": "Wide shot of the sea in 1866, watercolor style, ominous clouds gathering, a small ship silhouetted against the horizon. The sea is a blend of blues and greens, with soft, blurred edges.",
+        "dialogue": "Narrator: The year 1866 was marked by a strange incident, a mystery that gripped the world.",
+        "characters": []
+      },
+      {
+        "panel_id": 2,
+        "visual_description": "Close-up, watercolor style, a newspaper headline proclaiming 'Mysterious Sea Creature!' The colors are muted, with ink bleeds around the text. Dutch Tilt.",
+        "dialogue": "Narrator: Rumors spread like wildfire, exciting the minds of both common sailors and the governments of continents.",
+        "characters": []
+      },
+      {
+        "panel_id": 3,
+        "visual_description": "Long shot, watercolor style, several ships from different nations scattered across a vast ocean, searching. Soft light, a mix of grays and blues. Emphasis on the 'Vast' feel of the open ocean.",
+        "dialogue": "Sailor 1: What was that?",
+        "characters": []
+      },
+      {
+        "panel_id": 4,
+        "visual_description": "Close-up, watercolor style, a sailor's worried face, illuminated by the phosphorescent glow of something in the water. Colors are deep blues and greens, with subtle color bleeds.",
+        "dialogue": "Sailor 2: An enormous thing... larger than any whale!",
+        "characters": []
+      }
+    ]
+  },
+  {
+    "page_number": 2,
+    "panels": [
+      {
+        "panel_id": 1,
+        "visual_description": "Watercolor style, wide shot of a ship, the Governor Higginson, sailing near the coast of Australia. Two enormous columns of water erupting from the sea nearby. The sky is a wash of oranges and pinks.",
+        "dialogue": "Captain Baker: What in God's name?",
+        "characters": []
+      },
+      {
+        "panel_id": 2,
+        "visual_description": "Close-up, watercolor style, the columns of water, hissing and filled with vapor. Soft edges, the colors blending seamlessly.",
+        "dialogue": "Officer: It's like a geyser!",
+        "characters": []
+      },
+      {
+        "panel_id": 3,
+        "visual_description": "Mid-shot, watercolor style, the crew of the Governor Higginson, faces filled with awe and fear, looking towards the water spouts. The colors are muted, the expressions clear.",
+        "dialogue": "Sailor: But it moves... it's alive!",
+        "characters": []
+      },
+      {
+        "panel_id": 4,
+        "visual_description": "Long shot, watercolor style, the Governor Higginson shrinking in the distance as the mysterious creature vanishes beneath the waves. A lonely and melancholic scene.",
+        "dialogue": "Narrator: The creature could transport itself with impossible velocity, leaving behind only questions and fear.",
+        "characters": []
+      }
+    ]
+  }
+]
