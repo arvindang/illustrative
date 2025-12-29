@@ -21,10 +21,18 @@ class ScriptingAgent:
             if test_mode:
                 # Take 5000 characters from the middle of the book for a "Random Page" test
                 start_index = len(full_text) // 2
+                
+                # Attempt to find the start of a new line/paragraph to avoid cutting mid-sentence
+                try:
+                    # Find the next newline character
+                    start_index = full_text.index('\\n', start_index) + 1
+                except ValueError:
+                    pass  # If no newline found, stick to the approximate middle
+
                 return full_text[start_index : start_index + 5000]
             return full_text
 
-    async def generate_script(self, style: str, tone: str, test_mode=True):
+    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True):
         source_text = self.load_content(test_mode=test_mode)
         mode_label = "TEST PAGE" if test_mode else "FULL BOOK"
         
@@ -33,6 +41,7 @@ class ScriptingAgent:
         prompt = f"""
         Act as a Graphic Novel Director specializing in the '{style}' aesthetic.
         The tone of this adaptation is '{tone}'.
+        The writing style should be '{writing_style}'.
 
         When writing 'visual_description':
         - If style is 'Watercolor', focus on color bleeds and soft edges.
@@ -42,7 +51,13 @@ class ScriptingAgent:
         
         Adapt the following book into a structured graphic novel script.
         
-        For each page, provide exactly 4 panels.
+        For each page, determine the optimal layout and number of panels (1-6) based on narrative pacing:
+        - 1-2 Panels: Establishing shots, emotional beats, beautiful scenery, or dramatic reveals.
+        - 3-4 Panels: Balanced storytelling, standard conversations.
+        - 5-6 Panels: Quick action sequences, fast-paced dialogue, or montages.
+
+        Ensure a logical reading flow (Z-pattern: Top-Left -> Top-Right -> Bottom-Left -> Bottom-Right).
+        
         Each panel must include:
         1. visual_description: A detailed prompt for an AI image generator.
         2. dialogue: The text to appear in speech bubbles.
@@ -53,7 +68,7 @@ class ScriptingAgent:
         """
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3-pro-preview",
             contents=[prompt, source_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -63,6 +78,11 @@ class ScriptingAgent:
                         "type": "OBJECT",
                         "properties": {
                             "page_number": {"type": "INTEGER"},
+                            "layout_style": {
+                                "type": "STRING", 
+                                "enum": ["cinematic_widescreen", "action_dynamic", "standard_grid", "dialogue_focus", "full_splash"],
+                                "description": "The overall layout template to use for this page."
+                            },
                             "panels": {
                                 "type": "ARRAY",
                                 "items": {
@@ -78,7 +98,7 @@ class ScriptingAgent:
                                 }
                             }
                         },
-                        "required": ["page_number", "panels"]
+                        "required": ["page_number", "layout_style", "panels"]
                     }
                 }
             )
@@ -98,5 +118,5 @@ if __name__ == "__main__":
     import asyncio
     agent = ScriptingAgent("assets/input/20-thousand-leagues-under-the-sea.txt")
     # Change test_mode=False once you like the results of Page 1
-    asyncio.run(agent.generate_script(style="Watercolor", tone="Melancholic, Flowing, Vast", test_mode=True))
+    asyncio.run(agent.generate_script(style="Watercolor", tone="Melancholic, Flowing, Vast", writing_style="Cinematic, Jules Verne-esque but modern pacing", test_mode=True))
 
