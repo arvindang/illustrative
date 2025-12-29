@@ -38,11 +38,13 @@ class CompositorAgent:
         wrapped_text = self.wrap_text(text, 500)
         
         # Calculate text size
+        # We use (0,0) to get dimensions relative to the anchor point.
+        # We rely on bbox[2] (right) and bbox[3] (bottom) to ensure we cover the full rendered area.
         bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=self.font)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
+        text_w = bbox[2]
+        text_h = bbox[3]
         
-        padding = 20
+        padding = 30
         bubble_w = text_w + (padding * 2)
         bubble_h = text_h + (padding * 2)
         
