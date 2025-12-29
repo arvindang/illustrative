@@ -3,7 +3,7 @@
 ## 🛠 Tech Stack
 - **Language:** Python 3.12+ (Strict type hinting required).
 - **Primary AI:** Google Gemini API (Vertex AI or AI Studio).
-- **Models:** - Text/Logic: `gemini-1.5-pro` (2M context window).
+- **Models:** - Text/Logic: `gemini-2.5-flash` (2M context window).
     - Image: `gemini-3-pro-image` (utilizing Character Consistency tags).
 - **Libraries:** `google-generativeai`, `FastAPI` (Backend), `Pillow` (Image Layout), `ReportLab` (PDF generation).
 
