@@ -1,12 +1,12 @@
 [
   {
     "page_number": 1,
-    "layout_style": "cinematic_widescreen",
+    "layout_style": "dialogue_focus",
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Watercolor style. Extreme Close-up on Professor Aronnax's forehead. Beads of cold perspiration are rendered as watery, blue ink bleeds running down his skin. The background is a wash of murky, anxious teals and greys, representing his internal fear. Soft, diffused lighting.",
-        "dialogue": "Going up and down at the bottom of the sea... where one is almost certain to meet sharks...",
+        "visual_description": "Close-up, High Angle. Professor Aronnax is seated at a desk, head in hands. The style is strictly Botanical Illustration: thin, precise ink lines define his features, with flat, pale watercolor washes. Large drops of perspiration on his forehead are drawn with crystalline clarity, resembling dew on a leaf. The background suggests the metal of the Nautilus but is rendered with organic, vine-like piping.",
+        "dialogue": "To hunt the tiger in the jungle... one might laugh. But the shark in its natural element...",
         "characters": [
           "Professor Aronnax"
         ],
@@ -14,23 +14,19 @@
       },
       {
         "panel_id": 2,
-        "visual_description": "Medium shot. The door to Aronnax's cabin slides open. Ned Land and Conseil enter, framed by a warm, inviting yellow light that bleeds softly into the gloom of the room. They look composed and joyous, contrasting with the previous panel's tension.",
-        "dialogue": "Faith, sir! Your Captain Nemo\u2014the devil take him!\u2014has just made us a very pleasant offer.",
-        "characters": [
-          "Ned Land",
-          "Conseil"
-        ],
+        "visual_description": "A visualization of Aronnax's thought. A vintage biological plate illustration of a shark, rendered in desaturated sepia and grey. The shark is static but terrifyingly detailed, surrounded by scientific labels. The composition is melancholic and cold, emphasizing the void of the ocean.",
+        "dialogue": "I passed my hand over my forehead. Cold perspiration. Going up and down at the bottom of the sea... where one is almost certain to meet them.",
+        "characters": [],
         "bubble_position": "bottom-right"
       },
       {
         "panel_id": 3,
-        "visual_description": "Two-shot. Aronnax looks up, his face pale with a wash of white watercolor, while Conseil leans in eagerly. The background suggests the rivets of the Nautilus walls with loose, wet brushstrokes.",
-        "dialogue": "If agreeable to you, sir, the commander has invited us to visit the magnificent Ceylon fisheries to-morrow.",
+        "visual_description": "Mid-shot. Aronnax looks up, eyes wide and hollow. The lighting is soft and diffuse, typical of botanical art prints. He looks at his own hands as if they are foreign objects.",
+        "dialogue": "I am not a negro from the Andamans. A little hesitation would not be ill-timed.",
         "characters": [
-          "Professor Aronnax",
-          "Conseil"
+          "Professor Aronnax"
         ],
-        "bubble_position": "top-right"
+        "bubble_position": "bottom-left"
       }
     ]
   },
@@ -40,8 +36,53 @@
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Wide shot. The three men sit on a plush ottoman. The textures of the velvet fabric are rendered in deep reds and violets with soft edges. The atmosphere is academic but cozy. Aronnax is gesturing like a teacher.",
-        "dialogue": "Sit down, my friends. To the poet, a pearl is a tear of the sea; to the Orientals, a drop of solidified dew.",
+        "visual_description": "Medium Long Shot. Ned Land and Conseil enter the room. They are drawn with crisp outlines and warmer, flat colors (ochre and muted red) contrasting with the blue-grey gloom of the room. Their expressions are naive and joyous, framed by the arched doorway like a portrait.",
+        "dialogue": "Faith, sir! Your Captain Nemo\u2014the devil take him!\u2014has just made us a very pleasant offer.",
+        "characters": [
+          "Ned Land",
+          "Conseil"
+        ],
+        "bubble_position": "top-left"
+      },
+      {
+        "panel_id": 2,
+        "visual_description": "Over-the-shoulder view from behind Aronnax. Ned leans in excitedly. The background features a large porthole showing the deep sea, drawn with flat layers of blue.",
+        "dialogue": "If agreeable to you, sir, the commander has invited us to visit the magnificent Ceylon fisheries to-morrow.",
+        "characters": [
+          "Ned Land",
+          "Professor Aronnax"
+        ],
+        "bubble_position": "top-right"
+      },
+      {
+        "panel_id": 3,
+        "visual_description": "Close-up on Aronnax's face, shadowed. The style emphasizes the heavy linework around his eyes to show fatigue and dread (Melancholic tone). He forces a neutral expression.",
+        "dialogue": "He said nothing more? Nothing about... sharks?",
+        "characters": [
+          "Professor Aronnax"
+        ],
+        "bubble_position": "bottom-left"
+      },
+      {
+        "panel_id": 4,
+        "visual_description": "Two-shot. Conseil arranges equipment, oblivious. Ned sits on an ottoman. The furniture is drawn with the intricate detail of a floral engraving.",
+        "dialogue": "Nothing more, sir. Just a little walk. But tell us, sir, what is a pearl?",
+        "characters": [
+          "Conseil",
+          "Ned Land"
+        ],
+        "bubble_position": "bottom-right"
+      }
+    ]
+  },
+  {
+    "page_number": 3,
+    "layout_style": "cinematic_widescreen",
+    "panels": [
+      {
+        "panel_id": 1,
+        "visual_description": "Wide Shot. The three men sitting in the salon. The scene is framed by large underwater plants visible through the window, drawn in exquisite botanical detail. The interior feels like a quiet museum exhibit.",
+        "dialogue": "My worthy Ned, to the poet, a pearl is a tear of the sea; to the chemist, phosphate and carbonate of lime.",
         "characters": [
           "Professor Aronnax",
           "Ned Land",
@@ -51,71 +92,63 @@
       },
       {
         "panel_id": 2,
-        "visual_description": "Abstract watercolor montage. A thought bubble visualization blending with the scene: a glowing, opalescent pearl forming inside a loose, ink-wash oyster shell. The colors are iridescent pinks, creams, and silvers bleeding into the surrounding water.",
-        "dialogue": "For the naturalist, it is simply a morbid secretion... a nacreous formation deposited around a grain of sand, year after year.",
+        "visual_description": "Insert Shot / Macro. A stylized, cross-section scientific diagram of an oyster ('Meleagrina margaritifera'). Flat colors show the layers of nacre forming around a grain of sand. The lines are extremely fine, resembling a 19th-century lithograph.",
+        "dialogue": "It is simply a morbid secretion. A grain of sand intrudes, and the oyster covers it with pearly matter, year after year.",
         "characters": [],
-        "bubble_position": "bottom-right"
+        "bubble_position": "top-right"
       },
       {
         "panel_id": 3,
-        "visual_description": "Close-up on Aronnax. His eyes are wide, staring into the middle distance, the anxiety returning. The color palette shifts slightly back to the cold blues of the first page as his mind wanders to his fears.",
-        "dialogue": "One oyster has been mentioned... though I doubt it... as having contained no less than a hundred and fifty sharks.",
+        "visual_description": "Montage / Split focus. Various shells (mussels, earshells) float across the panel against a parchment-colored background, labeled with elegant handwriting. Aronnax's hand points to them.",
+        "dialogue": "Mussels in Scotland, France, and Ireland can do it too. But the precious pintadine is the true pearl-oyster.",
+        "characters": [
+          "Professor Aronnax"
+        ],
+        "bubble_position": "bottom-right"
+      }
+    ]
+  },
+  {
+    "page_number": 4,
+    "layout_style": "action_dynamic",
+    "panels": [
+      {
+        "panel_id": 1,
+        "visual_description": "Medium Shot. Aronnax is standing, gesturing. The atmosphere is calm, but his shadow on the wall is elongated and jagged, hinting at his internal state.",
+        "dialogue": "Some oysters are a perfect casket. One was mentioned as having contained no less than a hundred and fifty sharks.",
         "characters": [
           "Professor Aronnax"
         ],
         "bubble_position": "top-left"
       },
       {
-        "panel_id": 4,
-        "visual_description": "Reaction shot. Ned Land looks baffled, eyebrows raised. The background is a stark, dry-brush white to emphasize the sudden confusion.",
-        "dialogue": "A hundred and fifty sharks?!",
+        "panel_id": 2,
+        "visual_description": "Dutch Tilt, Close-up. Ned Land's face, frozen in confusion. The background lines slant, disrupting the stable 'botanical' order.",
+        "dialogue": "A hundred and fifty sharks!",
         "characters": [
           "Ned Land"
         ],
         "bubble_position": "top-right"
       },
       {
-        "panel_id": 5,
-        "visual_description": "Medium shot. Aronnax waves his hands hurriedly, a flush of embarrassed red watercolor spreading on his cheeks. Conseil looks on with a small, knowing smile.",
-        "dialogue": "Did I say sharks? I meant pearls! Sharks would not be sense.",
-        "characters": [
-          "Professor Aronnax",
-          "Conseil"
-        ],
-        "bubble_position": "bottom-left"
-      }
-    ]
-  },
-  {
-    "page_number": 3,
-    "layout_style": "dialogue_focus",
-    "panels": [
-      {
-        "panel_id": 1,
-        "visual_description": "Low angle, looking up at Aronnax. He has recovered his composure. The lighting is melancholic, casting long, soft shadows. He explains the process with a somber gravity.",
-        "dialogue": "The most common way is to lay the oysters on mats of seaweed. They die in the open air, and at the end of ten days, they are in a forward state of decomposition.",
+        "panel_id": 3,
+        "visual_description": "Close-up. Aronnax looks terrified, his eyes wide. The color palette shifts slightly to colder blues. The 'Botanical' precision makes his fear look frozen and statue-like.",
+        "dialogue": "Did I say sharks? I meant pearls. Sharks would not be sense.",
         "characters": [
           "Professor Aronnax"
         ],
-        "bubble_position": "top-left"
-      },
-      {
-        "panel_id": 2,
-        "visual_description": "Macro shot of a 'Virgin Pearl' or 'Paragon'. It floats in a void of deep indigo watercolor. It is perfectly round, glowing with an inner light, white and opaque like a moon in a night sky.",
-        "dialogue": "The most beautiful are called virgin pearls, or paragons. Formed alone in the tissue of the mollusc... white, often opaque.",
-        "characters": [],
-        "bubble_position": "bottom-right"
-      },
-      {
-        "panel_id": 3,
-        "visual_description": "Group shot, pulling back. The three figures are small in the frame, surrounded by the vast, ornate machinery of the Nautilus interior. The metalwork is rendered in sepia and brass tones, suggesting the enormity of the vessel and the ocean outside.",
-        "dialogue": "They have the transparency of an opal; they are generally round or oval. These are the treasures we seek.",
-        "characters": [
-          "Professor Aronnax",
-          "Ned Land",
-          "Conseil"
-        ],
         "bubble_position": "bottom-left"
+      },
+      {
+        "panel_id": 4,
+        "visual_description": "Long Shot. The group settles back down, but the tension remains. Aronnax wipes his brow again. In the background, through the glass, a faint silhouette of a shark passes by, drawn with faint, ghostly ink lines.",
+        "dialogue": "Certainly not. But tell us now, how do they extract these pearls?",
+        "characters": [
+          "Conseil",
+          "Professor Aronnax",
+          "Ned Land"
+        ],
+        "bubble_position": "bottom-right"
       }
     ]
   }
