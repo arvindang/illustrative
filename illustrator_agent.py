@@ -61,12 +61,25 @@ class IllustratorAgent:
         panel_id = panel_data['panel_id']
         print(f"🎨 Generating Page {page_num}, Panel {panel_id}...")
 
+        # Determine compositional negative space based on bubble position
+        bubble_pos = panel_data.get('bubble_position', 'top-left')
+        composition_instruction = ""
+        if bubble_pos == "top-left":
+            composition_instruction = "COMPOSITION RULE: Leave empty negative space in the TOP-LEFT corner for a speech bubble. Frame main action away from this corner."
+        elif bubble_pos == "top-right":
+            composition_instruction = "COMPOSITION RULE: Leave empty negative space in the TOP-RIGHT corner for a speech bubble. Frame main action away from this corner."
+        elif bubble_pos == "bottom-left":
+            composition_instruction = "COMPOSITION RULE: Leave empty negative space in the BOTTOM-LEFT corner for a speech bubble. Frame main action away from this corner."
+        elif bubble_pos == "bottom-right":
+            composition_instruction = "COMPOSITION RULE: Leave empty negative space in the BOTTOM-RIGHT corner for a speech bubble. Frame main action away from this corner."
+
         # 1. Construct the master prompt
         # Combine style, the specific panel description, and context.
         master_prompt = f"""
         STYLE DIRECTIVE: {self.style_prompt}
         
         PANEL VISUALS: {panel_data['visual_description']}
+        {composition_instruction}
         
         CONTEXT (Dialogue occurring): "{panel_data['dialogue']}"
         
