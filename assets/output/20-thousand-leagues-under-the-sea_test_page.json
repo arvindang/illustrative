@@ -4,27 +4,37 @@
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Wide shot of the sea in 1866, watercolor style, ominous clouds gathering, a small ship silhouetted against the horizon. The sea is a blend of blues and greens, with soft, blurred edges.",
-        "dialogue": "Narrator: The year 1866 was marked by a strange incident, a mystery that gripped the world.",
-        "characters": []
+        "visual_description": "Watercolor rendering. Professor Aronnax sitting at a wooden desk, bathed in soft, diffused light filtering through a porthole. Low Angle. Color palette is muted blues and grays, with bleeds around the edges of objects. Melancholic atmosphere.",
+        "dialogue": "\"Let us reflect, and take our time. Hunting otters in submarine forests... will pass; but going up and down at the bottom of the sea... is quite another thing!\"",
+        "characters": [
+          "Professor Aronnax"
+        ]
       },
       {
         "panel_id": 2,
-        "visual_description": "Close-up, watercolor style, a newspaper headline proclaiming 'Mysterious Sea Creature!' The colors are muted, with ink bleeds around the text. Dutch Tilt.",
-        "dialogue": "Narrator: Rumors spread like wildfire, exciting the minds of both common sailors and the governments of continents.",
-        "characters": []
+        "visual_description": "Watercolor rendering. Conseil and Ned Land enter the room, their faces animated with excitement. Dutch Tilt, emphasizing their carefree attitude. Washes of bright yellows and greens contrast with the professor's somber mood. Flowing lines suggest their movement.",
+        "dialogue": "Faith, sir, your Captain Nemo\u2014the devil take him!\u2014has just made us a very pleasant offer.",
+        "characters": [
+          "Ned Land",
+          "Conseil"
+        ]
       },
       {
         "panel_id": 3,
-        "visual_description": "Long shot, watercolor style, several ships from different nations scattered across a vast ocean, searching. Soft light, a mix of grays and blues. Emphasis on the 'Vast' feel of the open ocean.",
-        "dialogue": "Sailor 1: What was that?",
-        "characters": []
+        "visual_description": "Watercolor rendering. Close-up on Professor Aronnax's face, his expression a mix of surprise and concern. Soft edges and bleeds around his features convey his inner turmoil. The color scheme shifts to darker blues and purples, reflecting his anxiety. Vast empty space around his head.",
+        "dialogue": "Ah! You know?",
+        "characters": [
+          "Professor Aronnax"
+        ]
       },
       {
         "panel_id": 4,
-        "visual_description": "Close-up, watercolor style, a sailor's worried face, illuminated by the phosphorescent glow of something in the water. Colors are deep blues and greens, with subtle color bleeds.",
-        "dialogue": "Sailor 2: An enormous thing... larger than any whale!",
-        "characters": []
+        "visual_description": "Watercolor rendering. Conseil standing proudly, explaining the invitation. Camera zooms out slightly. Use of bright, transparent watercolors to depict the room, with details fading into the background. Flowing light suggests the airy nature of the situation.",
+        "dialogue": "If agreeable to you, sir, the commander of the _Nautilus_ has invited us to visit the magnificent Ceylon fisheries to-morrow, in your company.",
+        "characters": [
+          "Conseil",
+          "Professor Aronnax"
+        ]
       }
     ]
   },
@@ -33,27 +43,114 @@
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Watercolor style, wide shot of a ship, the Governor Higginson, sailing near the coast of Australia. Two enormous columns of water erupting from the sea nearby. The sky is a wash of oranges and pinks.",
-        "dialogue": "Captain Baker: What in God's name?",
-        "characters": []
+        "visual_description": "Watercolor rendering. Professor Aronnax is now sitting, in lecturing position, gesturing with his hand. Ned Land and Conseil are in the foreground, in listening poses. The color scheme is light greens to show learning. Vastness surrounds the group.",
+        "dialogue": "Very well; sit down, my friends, and I will teach you.",
+        "characters": [
+          "Professor Aronnax",
+          "Ned Land",
+          "Conseil"
+        ]
       },
       {
         "panel_id": 2,
-        "visual_description": "Close-up, watercolor style, the columns of water, hissing and filled with vapor. Soft edges, the colors blending seamlessly.",
-        "dialogue": "Officer: It's like a geyser!",
-        "characters": []
+        "visual_description": "Watercolor rendering. Ned Land's face, in a close up, asking a question. Use of dark reds and browns to show intensity. Flowing lines blur in the background, vast and deep.",
+        "dialogue": "Sir, what is a pearl?",
+        "characters": [
+          "Ned Land"
+        ]
       },
       {
         "panel_id": 3,
-        "visual_description": "Mid-shot, watercolor style, the crew of the Governor Higginson, faces filled with awe and fear, looking towards the water spouts. The colors are muted, the expressions clear.",
-        "dialogue": "Sailor: But it moves... it's alive!",
-        "characters": []
+        "visual_description": "Watercolor rendering. Professor Aronnax's face in profile, with soft colors. He appears to be speaking in a lecturing tone. Use of blues and whites in the background to show knowledge.",
+        "dialogue": "My worthy Ned, to the poet, a pearl is a tear of the sea; to the Orientals, it is a drop of dew solidified; to the ladies, it is a jewel...",
+        "characters": [
+          "Professor Aronnax"
+        ]
       },
       {
         "panel_id": 4,
-        "visual_description": "Long shot, watercolor style, the Governor Higginson shrinking in the distance as the mysterious creature vanishes beneath the waves. A lonely and melancholic scene.",
-        "dialogue": "Narrator: The creature could transport itself with impossible velocity, leaving behind only questions and fear.",
-        "characters": []
+        "visual_description": "Watercolor rendering. Conseil slightly turned, listening intently. Soft color palette of grays and blues. He seems to be absorbing knowledge.",
+        "dialogue": "Branch of molluscs.",
+        "characters": [
+          "Conseil"
+        ]
+      }
+    ]
+  },
+  {
+    "page_number": 3,
+    "panels": [
+      {
+        "panel_id": 1,
+        "visual_description": "Watercolor rendering. A wide shot of the Professor, Ned, and Conseil, sitting, the professor lecturing. The vastness of the open ocean behind them. Use of many thin lines to show depth.",
+        "dialogue": "Yes, mussels of certain waters in Scotland, Wales, Ireland, Saxony, Bohemia, and France.",
+        "characters": [
+          "Professor Aronnax",
+          "Ned Land",
+          "Conseil"
+        ]
+      },
+      {
+        "panel_id": 2,
+        "visual_description": "Watercolor rendering. A close up of Ned Land with a smile. Use of dark grays and browns. The flow of the conversation is apparent.",
+        "dialogue": "Good! For the future I shall pay attention.",
+        "characters": [
+          "Ned Land"
+        ]
+      },
+      {
+        "panel_id": 3,
+        "visual_description": "Watercolor rendering. The professor is standing and pointing. Use of bright light to suggest an idea. The lines are thin, and the colors are vast.",
+        "dialogue": "The pearl is nothing but a nacreous formation, deposited in a globular form, either adhering to the oyster shell, or buried in the folds of the creature.",
+        "characters": [
+          "Professor Aronnax"
+        ]
+      },
+      {
+        "panel_id": 4,
+        "visual_description": "Watercolor rendering. A close up of Conseil is staring intently. The coloring is washed out and faded.",
+        "dialogue": "Are many pearls found in the same oyster?",
+        "characters": [
+          "Conseil"
+        ]
+      }
+    ]
+  },
+  {
+    "page_number": 4,
+    "panels": [
+      {
+        "panel_id": 1,
+        "visual_description": "Watercolor rendering. Wide shot. The professor is now facing Ned, who looks surprised. Color washes are faint.",
+        "dialogue": "One oyster has been mentioned, though I allow myself to doubt it, as having contained no less than a hundred and fifty sharks.",
+        "characters": [
+          "Professor Aronnax",
+          "Ned Land"
+        ]
+      },
+      {
+        "panel_id": 2,
+        "visual_description": "Watercolor rendering. A close up of Ned's face. Deep colors, very bold.",
+        "dialogue": "A hundred and fifty sharks!",
+        "characters": [
+          "Ned Land"
+        ]
+      },
+      {
+        "panel_id": 3,
+        "visual_description": "Watercolor rendering. Back to a wide shot. The professor looks very nervous and sheepish. He's obviously made a mistake.",
+        "dialogue": "Did I say sharks? I meant to say a hundred and fifty pearls. Sharks would not be sense.",
+        "characters": [
+          "Professor Aronnax"
+        ]
+      },
+      {
+        "panel_id": 4,
+        "visual_description": "Watercolor rendering. Conseil, who is the calm one, has an inquisitive tone.",
+        "dialogue": "Certainly not; but will you tell us now by what means they extract these pearls?",
+        "characters": [
+          "Conseil"
+        ]
       }
     ]
   }

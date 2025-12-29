@@ -19,8 +19,9 @@ class ScriptingAgent:
         with open(self.book_path, "r", encoding="utf-8") as f:
             full_text = f.read()
             if test_mode:
-                # Take the first 5000 characters for a "Page 1" test
-                return full_text[:5000]
+                # Take 5000 characters from the middle of the book for a "Random Page" test
+                start_index = len(full_text) // 2
+                return full_text[start_index : start_index + 5000]
             return full_text
 
     async def generate_script(self, style: str, tone: str, test_mode=True):
