@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
@@ -16,59 +17,49 @@ class ScriptingAgent:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def load_content(self, test_mode=True):
+        """
+        Loads the book content. 
+        In Test Mode: Returns a 10k char slice to save tokens/time.
+        In Prod Mode: Returns the full text.
+        """
         with open(self.book_path, "r", encoding="utf-8") as f:
             full_text = f.read()
             if test_mode:
-                # Take 5000 characters from the middle of the book for a "Random Page" test
-                start_index = len(full_text) // 2
-                
-                # Attempt to find the start of a new line/paragraph to avoid cutting mid-sentence
-                try:
-                    # Find the next newline character
-                    start_index = full_text.index('\\n', start_index) + 1
-                except ValueError:
-                    pass  # If no newline found, stick to the approximate middle
-
-                return full_text[start_index : start_index + 5000]
+                # Take a slice from the middle
+                mid = len(full_text) // 2
+                start = max(0, mid - 5000)
+                end = min(len(full_text), mid + 5000)
+                return f"...{full_text[start:end]}..."
             return full_text
 
-    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True):
-        source_text = self.load_content(test_mode=test_mode)
-        mode_label = "TEST PAGE" if test_mode else "FULL BOOK"
-        
-        print(f"🧠 Mode: {mode_label} | Analyzing: {self.book_path.name}...")
-
-        prompt = f"""
-        Act as a Graphic Novel Director specializing in the '{style}' aesthetic.
-        The tone of this adaptation is '{tone}'.
-        The writing style should be '{writing_style}'.
-
-        When writing 'visual_description':
-        - If style is 'Watercolor', focus on color bleeds and soft edges.
-        - If style is 'Noir', focus on stark silhouettes and heavy ink.
-        - If style is 'Botanical', focus on thin lines, flat colors, emphasize natural surroundings.         
-        - Use camera terminology (Low Angle, Dutch Tilt, Close-up) that matches the '{tone}'.
-        
-        Adapt the following book into a structured graphic novel script.
-        
-        For each page, determine the optimal layout and number of panels (1-6) based on narrative pacing:
-        - 1-2 Panels: Establishing shots, emotional beats, beautiful scenery, or dramatic reveals.
-        - 3-4 Panels: Balanced storytelling, standard conversations.
-        - 5-6 Panels: Quick action sequences, fast-paced dialogue, or montages.
-
-        Ensure a logical reading flow (Z-pattern: Top-Left -> Top-Right -> Bottom-Left -> Bottom-Right).
-        
-        Each panel must include:
-        1. visual_description: A detailed prompt for an AI image generator.
-        2. dialogue: The text to appear in speech bubbles.
-        3. character_presence: A list of main characters in the panel.
-        4. bubble_position: Best location for text ("top-left", "top-right", "bottom-left", "bottom-right") to avoid covering faces/action.
-
-        OUTPUT FORMAT: Provide only valid JSON.
+    async def generate_beat_sheet(self, source_text: str, style: str, target_page_count: int = 30):
         """
+        THE ARCHITECT: break the story down into a page-by-page outline.
+        This ensures the pacing covers the WHOLE story, not just the first chapter.
+        """
+        print(f"🏗️  Architecting story structure (Target: {target_page_count} pages)...")
+        
+        prompt = f"""
+        Act as a Master Editor adapting a novel into a {target_page_count}-page Graphic Novel.
+        Your goal is ADAPTATION, not translation. You must condense the story while preserving the narrative arc, emotional beats, and key action.
 
+        STYLE: {style}
+        
+        TASK:
+        Create a numbered Beat Sheet for exactly {target_page_count} pages.
+        For each page, provide:
+        1. 'page_number': The integer page number.
+        2. 'narrative_goal': What plot point happens on this page? (e.g., "The Nautilus is revealed", "Escape attempt fails").
+        3. 'key_visual': The most important visual anchor for this page.
+        4. 'atmosphere': The mood of this specific page.
+
+        Ensure the story has a beginning, middle, and end within these {target_page_count} pages.
+        
+        OUTPUT FORMAT: JSON List of Objects.
+        """
+        
         response = client.models.generate_content(
-            model="gemini-3-pro-preview",
+            model="gemini-2.0-flash",
             contents=[prompt, source_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -78,45 +69,111 @@ class ScriptingAgent:
                         "type": "OBJECT",
                         "properties": {
                             "page_number": {"type": "INTEGER"},
-                            "layout_style": {
-                                "type": "STRING", 
-                                "enum": ["cinematic_widescreen", "action_dynamic", "standard_grid", "dialogue_focus", "full_splash"],
-                                "description": "The overall layout template to use for this page."
-                            },
-                            "panels": {
-                                "type": "ARRAY",
-                                "items": {
-                                    "type": "OBJECT",
-                                    "properties": {
-                                        "panel_id": {"type": "INTEGER"},
-                                        "visual_description": {"type": "STRING"},
-                                        "dialogue": {"type": "STRING"},
-                                        "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
-                                        "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
-                                    },
-                                    "required": ["panel_id", "visual_description", "dialogue", "characters", "bubble_position"]
-                                }
-                            }
+                            "narrative_goal": {"type": "STRING"},
+                            "key_visual": {"type": "STRING"},
+                            "atmosphere": {"type": "STRING"}
                         },
-                        "required": ["page_number", "layout_style", "panels"]
+                        "required": ["page_number", "narrative_goal"]
                     }
                 }
             )
         )
+        
+        # Save Beat Sheet for Review
+        beat_sheet_path = self.output_dir / f"{self.book_path.stem}_beat_sheet.json"
+        with open(beat_sheet_path, "w") as f:
+            json.dump(response.parsed, f, indent=2)
+            
+        print(f"✅ Beat Sheet Saved: {beat_sheet_path}")
+        return response.parsed
+
+    async def write_page_script(self, beat: dict, source_text: str, style: str, tone: str):
+        """
+        THE SCRIBE: Writes the detailed panel directions for a SINGLE page based on the Beat Sheet.
+        """
+        print(f"✍️  Scripting Page {beat['page_number']}: {beat['narrative_goal']}...")
+        
+        prompt = f"""
+        Act as a Graphic Novel Scriptwriter.
+        
+        CONTEXT:
+        We are adapting a novel into a graphic novel.
+        Current Page Goal: {beat['narrative_goal']}
+        Key Visual: {beat['key_visual']}
+        Atmosphere: {beat['atmosphere']}
+        Style: {style}
+        Tone: {tone}
+        
+        INSTRUCTIONS:
+        Write the script for Page {beat['page_number']}.
+        - Break this specific scene into 1-6 panels.
+        - Ensure a logical visual flow (Z-pattern).
+        - VISUAL DESCRIPTION: Must be highly descriptive for an AI image generator (mention lighting, angles, colors).
+        - DIALOGUE: Keep it punchy. Use standard comic conventions.
+        - BUBBLE POSITION: Ensure text doesn't cover faces.
+        
+        Reference the Source Text provided to maintain character voice, but feel free to abridge dialogue significantly.
+        """
+
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[prompt, "SOURCE TEXT CONTEXT:\n" + source_text],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema={
+                    "type": "OBJECT",
+                    "properties": {
+                        "page_number": {"type": "INTEGER"},
+                        "layout_style": {"type": "STRING", "enum": ["cinematic_widescreen", "action_dynamic", "standard_grid", "dialogue_focus", "full_splash"]},
+                        "panels": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "panel_id": {"type": "INTEGER"},
+                                    "visual_description": {"type": "STRING"},
+                                    "dialogue": {"type": "STRING"},
+                                    "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
+                                },
+                                "required": ["panel_id", "visual_description", "dialogue", "characters", "bubble_position"]
+                            }
+                        }
+                    },
+                    "required": ["page_number", "panels"]
+                }
+            )
+        )
+        return response.parsed
+
+    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True):
+        source_text = self.load_content(test_mode=test_mode)
+        
+        # 1. THE ARCHITECT PHASE
+        # If test mode, we just do 1 page. If full, we do 20 pages (for this demo, to save time/cost).
+        target_pages = 1 if test_mode else 10
+        beat_sheet = await self.generate_beat_sheet(source_text, style, target_pages)
+        
+        # 2. THE SCRIBE PHASE
+        full_script = []
+        
+        # In a real heavy-duty app, we might parallelize this with asyncio.gather, 
+        # but serial is safer for rate limits and debugging.
+        for beat in beat_sheet:
+            page_script = await self.write_page_script(beat, source_text, style, tone)
+            full_script.append(page_script)
 
         # Save the result
         suffix = "_test_page.json" if test_mode else "_full_script.json"
         output_file = self.output_dir / f"{self.book_path.stem}{suffix}"
         
         with open(output_file, "w") as f:
-            json.dump(response.parsed, f, indent=2)
+            json.dump(full_script, f, indent=2)
         
-        print(f"✅ Success! Preview your script here: {output_file}")
-        return response.parsed
+        print(f"✅ Script Generation Complete! Saved to: {output_file}")
+        return full_script
 
 if __name__ == "__main__":
-    import asyncio
     agent = ScriptingAgent("assets/input/20-thousand-leagues-under-the-sea.txt")
-    # Change test_mode=False once you like the results of Page 1
-    asyncio.run(agent.generate_script(style="Watercolor", tone="Melancholic, Flowing, Vast", writing_style="Cinematic, Jules Verne-esque but modern pacing", test_mode=True))
+    asyncio.run(agent.generate_script(style="Watercolor", tone="Melancholic", writing_style="Cinematic", test_mode=True))
 

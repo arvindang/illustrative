@@ -22,6 +22,8 @@ def init_session_state():
         st.session_state.step = 1
     if 'project_config' not in st.session_state:
         st.session_state.project_config = {}
+    if 'beat_sheet_data' not in st.session_state:
+        st.session_state.beat_sheet_data = None
     if 'script_data' not in st.session_state:
         st.session_state.script_data = None
     if 'characters_designed' not in st.session_state:
@@ -29,6 +31,7 @@ def init_session_state():
 
 def reset_pipeline():
     st.session_state.step = 1
+    st.session_state.beat_sheet_data = None
     st.session_state.script_data = None
     st.session_state.characters_designed = False
     st.rerun()
@@ -78,23 +81,76 @@ def main():
             
             st.success(f"File loaded: {uploaded_file.name}")
             
-            if st.button("Generate Script ➡️"):
+            if st.button("Generate Beat Sheet ➡️"):
                 st.session_state.project_config = {
                     "input_path": str(input_path),
                     "style": style,
                     "tone": tone,
                     "test_mode": test_mode
                 }
-                with st.spinner("🤖 Reading manuscript and generating script (Gemini 1.5 Pro)..."):
+                
+                # Run Architect Phase
+                with st.spinner("🏗️ Architecting Story Arc (Gemini 2.0 Flash)..."):
                     scripter = ScriptingAgent(str(input_path))
-                    # Assuming default writing style for now, could expose in UI
-                    script_json = asyncio.run(scripter.generate_script(
+                    # Load text manually to pass to Architect method
+                    source_text = scripter.load_content(test_mode=test_mode)
+                    target_pages = 1 if test_mode else 10
+                    
+                    beat_sheet = asyncio.run(scripter.generate_beat_sheet(
+                        source_text, 
                         style=style, 
-                        tone=tone, 
-                        writing_style="Cinematic", 
-                        test_mode=test_mode
+                        target_page_count=target_pages
                     ))
-                    st.session_state.script_data = script_json
+                    
+                    st.session_state.beat_sheet_data = beat_sheet
+                    st.session_state.step = 1.5
+                    st.rerun()
+
+    # STEP 1.5: BEAT SHEET REVIEW
+    elif st.session_state.step == 1.5:
+        st.header("Step 1.5: Review Story Arc")
+        st.info("Review the page-by-page breakdown before generating the full script.")
+        
+        beat_sheet = st.session_state.beat_sheet_data
+        
+        # Simple Table/JSON View
+        for beat in beat_sheet:
+            with st.expander(f"Page {beat['page_number']}: {beat['narrative_goal']}", expanded=False):
+                st.write(f"**Visual:** {beat['key_visual']}")
+                st.write(f"**Atmosphere:** {beat['atmosphere']}")
+        
+        col1, col2 = st.columns([1, 4])
+        with col1:
+             if st.button("⬅️ Back"):
+                st.session_state.step = 1
+                st.rerun()
+        with col2:
+            if st.button("Approve & Write Full Script ➡️"):
+                config = st.session_state.project_config
+                scripter = ScriptingAgent(config['input_path'])
+                source_text = scripter.load_content(test_mode=config['test_mode'])
+                
+                with st.spinner("✍️ Writing Scene Scripts (Gemini 2.0 Flash)..."):
+                    full_script = []
+                    # Progress bar for script generation
+                    progress_bar = st.progress(0)
+                    total_beats = len(beat_sheet)
+                    
+                    for i, beat in enumerate(beat_sheet):
+                        page_script = asyncio.run(scripter.write_page_script(
+                            beat, source_text, config['style'], config['tone']
+                        ))
+                        full_script.append(page_script)
+                        progress_bar.progress((i + 1) / total_beats)
+                    
+                    st.session_state.script_data = full_script
+                    
+                    # Save locally as expected by next steps
+                    suffix = "_test_page.json" if config['test_mode'] else "_full_script.json"
+                    output_file = Path("assets/output") / f"{Path(config['input_path']).stem}{suffix}"
+                    with open(output_file, "w") as f:
+                        json.dump(full_script, f, indent=2)
+
                     st.session_state.step = 2
                     st.rerun()
 
@@ -124,7 +180,7 @@ def main():
         col1, col2 = st.columns([1, 4])
         with col1:
              if st.button("⬅️ Back"):
-                st.session_state.step = 1
+                st.session_state.step = 1.5 # Go back to Beat Sheet
                 st.rerun()
         with col2:
             if st.button("Approve Script & Analyze Characters ➡️"):
