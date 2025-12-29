@@ -74,46 +74,136 @@ class CompositorAgent:
         text_y = y + padding
         draw.multiline_text((text_x, text_y), wrapped_text, font=self.font, fill="black")
 
+    def calculate_layout(self, num_panels):
+        """
+        Calculates panel coordinates (x, y, w, h) for 1-6 panels
+        to fill the page, accounting for margins and gutters.
+        Returns a list of tuples: [(x, y, w, h), ...] relative to the margin.
+        """
+        W = self.page_width - (2 * self.margin)
+        H = self.page_height - (2 * self.margin)
+        g = self.gutter
+        
+        layout = []
+        
+        if num_panels == 1:
+            # 1 Panel: Full Page
+            layout.append((0, 0, W, H))
+            
+        elif num_panels == 2:
+            # 2 Panels: Stacked Vertical (Top / Bottom)
+            h_half = (H - g) // 2
+            layout.append((0, 0, W, h_half))
+            layout.append((0, h_half + g, W, h_half))
+            
+        elif num_panels == 3:
+            # 3 Panels: 2 Top (Half Width), 1 Bottom (Full Width)
+            h_half = (H - g) // 2
+            w_half = (W - g) // 2
+            
+            # Row 1 (2 panels)
+            layout.append((0, 0, w_half, h_half))
+            layout.append((w_half + g, 0, w_half, h_half))
+            
+            # Row 2 (1 panel, full width)
+            layout.append((0, h_half + g, W, h_half))
+            
+        elif num_panels == 4:
+            # 4 Panels: Standard 2x2 Grid
+            h_half = (H - g) // 2
+            w_half = (W - g) // 2
+            
+            # Row 1
+            layout.append((0, 0, w_half, h_half))
+            layout.append((w_half + g, 0, w_half, h_half))
+            # Row 2
+            layout.append((0, h_half + g, w_half, h_half))
+            layout.append((w_half + g, h_half + g, w_half, h_half))
+            
+        elif num_panels == 5:
+            # 5 Panels: 3 Rows (2 Top, 2 Middle, 1 Bottom)
+            h_third = (H - 2 * g) // 3
+            w_half = (W - g) // 2
+            
+            # Row 1
+            layout.append((0, 0, w_half, h_third))
+            layout.append((w_half + g, 0, w_half, h_third))
+            
+            # Row 2
+            layout.append((0, h_third + g, w_half, h_third))
+            layout.append((w_half + g, h_third + g, w_half, h_third))
+            
+            # Row 3 (Full Width)
+            layout.append((0, (2 * h_third) + (2 * g), W, h_third))
+            
+        elif num_panels >= 6:
+            # 6+ Panels: 3 Rows x 2 Cols
+            # Limit to 6 for now, extra panels will be ignored or overlaid
+            h_third = (H - 2 * g) // 3
+            w_half = (W - g) // 2
+            
+            for row in range(3):
+                y = row * (h_third + g)
+                layout.append((0, y, w_half, h_third))
+                layout.append((w_half + g, y, w_half, h_third))
+                
+            # If > 6, they won't get coordinates here, loop in assemble_page handles index check
+            
+        return layout
+
     def assemble_page(self, page_data):
         page_num = page_data['page_number']
-        print(f"📄 Assembling Page {page_num}...")
+        panels_list = page_data['panels']
+        num_panels = len(panels_list)
+        
+        print(f"📄 Assembling Page {page_num} with {num_panels} panels...")
         
         # Create a blank white canvas
         canvas = Image.new("RGB", (self.page_width, self.page_height), "white")
         draw = ImageDraw.Draw(canvas)
         
-        # Calculate panel sizes for a 2x2 grid
-        panel_w = (self.page_width - (2 * self.margin) - self.gutter) // 2
-        panel_h = (self.page_height - (2 * self.margin) - self.gutter) // 2
+        # Get dynamic layout coordinates
+        layout = self.calculate_layout(num_panels)
         
-        for idx, panel in enumerate(page_data['panels']):
+        for idx, panel in enumerate(panels_list):
+            if idx >= len(layout):
+                print(f"⚠️ Skipping extra panel {panel['panel_id']} (Layout maxed out)")
+                continue
+
+            # Get relative coordinates (x, y, w, h) from layout
+            rel_x, rel_y, panel_w, panel_h = layout[idx]
+            
+            # Apply Absolute Page Margins
+            pos_x = self.margin + rel_x
+            pos_y = self.margin + rel_y
+            
             panel_id = panel['panel_id']
             img_path = self.panels_dir / f"page_{page_num}" / f"panel_{panel_id}.png"
             
             if not img_path.exists():
                 print(f"⚠️ Missing image for Page {page_num}, Panel {panel_id}")
+                # Draw a placeholder rectangle if missing
+                draw.rectangle([pos_x, pos_y, pos_x + panel_w, pos_y + panel_h], outline="red", width=5)
                 continue
                 
             # Load and resize the generated panel
             # Use ImageOps.fit to maintain aspect ratio (center crop)
-            panel_img = Image.open(img_path)
-            panel_img = ImageOps.fit(panel_img, (panel_w, panel_h), method=Image.Resampling.LANCZOS)
-            
-            # Calculate position on the grid
-            col = idx % 2
-            row = idx // 2
-            pos_x = self.margin + (col * (panel_w + self.gutter))
-            pos_y = self.margin + (row * (panel_h + self.gutter))
-            
-            # Paste the panel
-            canvas.paste(panel_img, (pos_x, pos_y))
-            
-            # Draw the dialogue bubble
-            if panel.get('dialogue'):
-                # Get preferred position from JSON, default to top-left
-                pos_code = panel.get('bubble_position', 'top-left')
-                panel_rect = (pos_x, pos_y, panel_w, panel_h)
-                self.draw_speech_bubble(draw, panel['dialogue'], panel_rect, pos_code)
+            try:
+                panel_img = Image.open(img_path)
+                panel_img = ImageOps.fit(panel_img, (panel_w, panel_h), method=Image.Resampling.LANCZOS)
+                
+                # Paste the panel
+                canvas.paste(panel_img, (pos_x, pos_y))
+                
+                # Draw the dialogue bubble
+                if panel.get('dialogue'):
+                    # Get preferred position from JSON, default to top-left
+                    pos_code = panel.get('bubble_position', 'top-left')
+                    panel_rect = (pos_x, pos_y, panel_w, panel_h)
+                    self.draw_speech_bubble(draw, panel['dialogue'], panel_rect, pos_code)
+                    
+            except Exception as e:
+                print(f"❌ Error processing Panel {panel_id}: {e}")
 
         # Save the final page
         output_path = self.output_dir / f"page_{page_num}.png"
