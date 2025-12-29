@@ -4,37 +4,39 @@
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Watercolor rendering. Professor Aronnax sitting at a wooden desk, bathed in soft, diffused light filtering through a porthole. Low Angle. Color palette is muted blues and grays, with bleeds around the edges of objects. Melancholic atmosphere.",
-        "dialogue": "\"Let us reflect, and take our time. Hunting otters in submarine forests... will pass; but going up and down at the bottom of the sea... is quite another thing!\"",
-        "characters": [
-          "Professor Aronnax"
-        ]
+        "visual_description": "Wide shot, Lush Watercolor style. The Scotia steamship in dry dock, showing the enormous triangular gash in its hull. Engineers are inspecting it. Muted colors, industrial feel.",
+        "dialogue": "Narrator: The accident to the Scotia was widely known. A hole two meters below the waterline... a perfect isosceles triangle.",
+        "characters": [],
+        "bubble_position": "top-right"
       },
       {
         "panel_id": 2,
-        "visual_description": "Watercolor rendering. Conseil and Ned Land enter the room, their faces animated with excitement. Dutch Tilt, emphasizing their carefree attitude. Washes of bright yellows and greens contrast with the professor's somber mood. Flowing lines suggest their movement.",
-        "dialogue": "Faith, sir, your Captain Nemo\u2014the devil take him!\u2014has just made us a very pleasant offer.",
+        "visual_description": "Close-up, Lush Watercolor style. Professor Aronnax sitting in his office in Paris, reading a letter. Warm interior lighting, books in the background. He looks thoughtful.",
+        "dialogue": "Aronnax: The Minister of Marine invites me to join the expedition of the Abraham Lincoln.",
         "characters": [
-          "Ned Land",
-          "Conseil"
-        ]
+          "Professor Aronnax"
+        ],
+        "bubble_position": "bottom-right"
       },
       {
         "panel_id": 3,
-        "visual_description": "Watercolor rendering. Close-up on Professor Aronnax's face, his expression a mix of surprise and concern. Soft edges and bleeds around his features convey his inner turmoil. The color scheme shifts to darker blues and purples, reflecting his anxiety. Vast empty space around his head.",
-        "dialogue": "Ah! You know?",
+        "visual_description": "Mid-shot, Lush Watercolor style. Aronnax and his servant Conseil packing trunks in their apartment. Conseil is calm and efficient, Aronnax is flustered. Sunlight streaming through a window.",
+        "dialogue": "Aronnax: Conseil! I am leaving for New York. We sail on the Abraham Lincoln to hunt the monster!",
         "characters": [
-          "Professor Aronnax"
-        ]
+          "Professor Aronnax",
+          "Conseil"
+        ],
+        "bubble_position": "top-left"
       },
       {
         "panel_id": 4,
-        "visual_description": "Watercolor rendering. Conseil standing proudly, explaining the invitation. Camera zooms out slightly. Use of bright, transparent watercolors to depict the room, with details fading into the background. Flowing light suggests the airy nature of the situation.",
-        "dialogue": "If agreeable to you, sir, the commander of the _Nautilus_ has invited us to visit the magnificent Ceylon fisheries to-morrow, in your company.",
+        "visual_description": "Close-up, Lush Watercolor style. Conseil looking calmly at Aronnax. Soft focus background.",
+        "dialogue": "Conseil: As monsieur pleases.",
         "characters": [
           "Conseil",
           "Professor Aronnax"
-        ]
+        ],
+        "bubble_position": "bottom-left"
       }
     ]
   },
@@ -43,37 +45,41 @@
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Watercolor rendering. Professor Aronnax is now sitting, in lecturing position, gesturing with his hand. Ned Land and Conseil are in the foreground, in listening poses. The color scheme is light greens to show learning. Vastness surrounds the group.",
-        "dialogue": "Very well; sit down, my friends, and I will teach you.",
+        "visual_description": "Wide shot, Lush Watercolor style. The Abraham Lincoln leaving the Brooklyn pier. Crowds cheering, flags waving. The skyline of New York in the background. Bright and energetic.",
+        "dialogue": "Narrator: The frigate Abraham Lincoln was prepared to purge the seas of this formidable cetacean.",
         "characters": [
           "Professor Aronnax",
           "Ned Land",
           "Conseil"
-        ]
+        ],
+        "bubble_position": "top-right"
       },
       {
         "panel_id": 2,
-        "visual_description": "Watercolor rendering. Ned Land's face, in a close up, asking a question. Use of dark reds and browns to show intensity. Flowing lines blur in the background, vast and deep.",
-        "dialogue": "Sir, what is a pearl?",
+        "visual_description": "Mid-shot, Lush Watercolor style. On the deck of the Abraham Lincoln. Aronnax talking to Ned Land, the Canadian harpooner. Ned looks skeptical, leaning on the railing.",
+        "dialogue": "Ned Land: I have chased many whales, professor. But a unicorn of the sea made of iron? Impossible.",
         "characters": [
           "Ned Land"
-        ]
+        ],
+        "bubble_position": "top-left"
       },
       {
         "panel_id": 3,
-        "visual_description": "Watercolor rendering. Professor Aronnax's face in profile, with soft colors. He appears to be speaking in a lecturing tone. Use of blues and whites in the background to show knowledge.",
-        "dialogue": "My worthy Ned, to the poet, a pearl is a tear of the sea; to the Orientals, it is a drop of dew solidified; to the ladies, it is a jewel...",
+        "visual_description": "Close-up, Lush Watercolor style. Aronnax gesturing excitedly, trying to convince Ned. The sea is visible behind them.",
+        "dialogue": "Aronnax: But the science, Ned! The evidence supports a narwhal of colossal dimensions!",
         "characters": [
           "Professor Aronnax"
-        ]
+        ],
+        "bubble_position": "bottom-right"
       },
       {
         "panel_id": 4,
-        "visual_description": "Watercolor rendering. Conseil slightly turned, listening intently. Soft color palette of grays and blues. He seems to be absorbing knowledge.",
-        "dialogue": "Branch of molluscs.",
+        "visual_description": "Mid-shot, Lush Watercolor style. Conseil organizing instruments on a table on deck, listening to the conversation. He is neutral and attentive.",
+        "dialogue": "Conseil: If monsieur says it is a narwhal, it is a narwhal.",
         "characters": [
           "Conseil"
-        ]
+        ],
+        "bubble_position": "top-left"
       }
     ]
   },
@@ -82,37 +88,41 @@
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Watercolor rendering. A wide shot of the Professor, Ned, and Conseil, sitting, the professor lecturing. The vastness of the open ocean behind them. Use of many thin lines to show depth.",
-        "dialogue": "Yes, mussels of certain waters in Scotland, Wales, Ireland, Saxony, Bohemia, and France.",
+        "visual_description": "Wide shot, Lush Watercolor style. Night time on the deck. The crew watching the dark sea. The moon is reflecting on the water. Tense atmosphere.",
+        "dialogue": "Narrator: For three months we patrolled the North Pacific. The crew was on edge.",
         "characters": [
           "Professor Aronnax",
           "Ned Land",
           "Conseil"
-        ]
+        ],
+        "bubble_position": "top-left"
       },
       {
         "panel_id": 2,
-        "visual_description": "Watercolor rendering. A close up of Ned Land with a smile. Use of dark grays and browns. The flow of the conversation is apparent.",
-        "dialogue": "Good! For the future I shall pay attention.",
+        "visual_description": "Close-up, Lush Watercolor style. Ned Land peering into the darkness with a telescope. His expression is intense.",
+        "dialogue": "Ned Land: Look there! A strange light!",
         "characters": [
           "Ned Land"
-        ]
+        ],
+        "bubble_position": "top-right"
       },
       {
         "panel_id": 3,
-        "visual_description": "Watercolor rendering. The professor is standing and pointing. Use of bright light to suggest an idea. The lines are thin, and the colors are vast.",
-        "dialogue": "The pearl is nothing but a nacreous formation, deposited in a globular form, either adhering to the oyster shell, or buried in the folds of the creature.",
+        "visual_description": "Mid-shot, Lush Watercolor style. Aronnax and Conseil rushing to the railing. In the distance, an intense electric light glows underwater. Blue and eerie lighting.",
+        "dialogue": "Aronnax: It's the creature! It's glowing!",
         "characters": [
           "Professor Aronnax"
-        ]
+        ],
+        "bubble_position": "bottom-left"
       },
       {
         "panel_id": 4,
-        "visual_description": "Watercolor rendering. A close up of Conseil is staring intently. The coloring is washed out and faded.",
-        "dialogue": "Are many pearls found in the same oyster?",
+        "visual_description": "Close-up, Lush Watercolor style. Conseil looking at the light, eyes wide. The light illuminates his face.",
+        "dialogue": "Conseil: It is moving towards us, monsieur! At great speed!",
         "characters": [
           "Conseil"
-        ]
+        ],
+        "bubble_position": "bottom-right"
       }
     ]
   },
@@ -121,36 +131,40 @@
     "panels": [
       {
         "panel_id": 1,
-        "visual_description": "Watercolor rendering. Wide shot. The professor is now facing Ned, who looks surprised. Color washes are faint.",
-        "dialogue": "One oyster has been mentioned, though I allow myself to doubt it, as having contained no less than a hundred and fifty sharks.",
+        "visual_description": "Wide shot, Lush Watercolor style. The creature ramming the Abraham Lincoln. Water spraying, the ship rocking violently. Chaos on deck.",
+        "dialogue": "Narrator: The collision was inevitable. A shock that threw us all off balance.",
         "characters": [
           "Professor Aronnax",
           "Ned Land"
-        ]
+        ],
+        "bubble_position": "top-left"
       },
       {
         "panel_id": 2,
-        "visual_description": "Watercolor rendering. A close up of Ned's face. Deep colors, very bold.",
-        "dialogue": "A hundred and fifty sharks!",
+        "visual_description": "Mid-shot, Lush Watercolor style. Ned Land throwing his harpoon, but it bounces off the metallic hide of the creature with a clang. Sparks fly.",
+        "dialogue": "Ned Land: Damnation! It's armored!",
         "characters": [
           "Ned Land"
-        ]
+        ],
+        "bubble_position": "top-right"
       },
       {
         "panel_id": 3,
-        "visual_description": "Watercolor rendering. Back to a wide shot. The professor looks very nervous and sheepish. He's obviously made a mistake.",
-        "dialogue": "Did I say sharks? I meant to say a hundred and fifty pearls. Sharks would not be sense.",
+        "visual_description": "Mid-shot, Lush Watercolor style. Aronnax falling overboard into the dark, churning water. Reaching out. Panic.",
+        "dialogue": "Aronnax: Conseil! Help!",
         "characters": [
           "Professor Aronnax"
-        ]
+        ],
+        "bubble_position": "bottom-left"
       },
       {
         "panel_id": 4,
-        "visual_description": "Watercolor rendering. Conseil, who is the calm one, has an inquisitive tone.",
-        "dialogue": "Certainly not; but will you tell us now by what means they extract these pearls?",
+        "visual_description": "Close-up, Lush Watercolor style. Conseil diving into the water after his master. Determined expression.",
+        "dialogue": "Conseil: I am coming, monsieur!",
         "characters": [
           "Conseil"
-        ]
+        ],
+        "bubble_position": "bottom-right"
       }
     ]
   }
