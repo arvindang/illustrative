@@ -91,7 +91,7 @@ def main():
                     "input_path": str(input_path),
                     "style": style,
                     "tone": tone,
-                    "context_constraints": context_constraints,
+                    "context_constraints": st.session_state.context_constraints,
                     "test_mode": test_mode
                 }
                 
@@ -102,10 +102,13 @@ def main():
                     full_text = scripter.load_content(test_mode=False)
                     
                     # Parallelize mapping and context analysis
-                    chapter_map_task = scripter.generate_chapter_map(full_text)
-                    context_task = scripter.analyze_global_context(full_text)
+                    async def setup_story():
+                        return await asyncio.gather(
+                            scripter.generate_chapter_map(full_text),
+                            scripter.analyze_global_context(full_text)
+                        )
                     
-                    chapter_map, detected_context = asyncio.run(asyncio.gather(chapter_map_task, context_task))
+                    chapter_map, detected_context = asyncio.run(setup_story())
                     
                     st.session_state.chapter_map = chapter_map
                     st.session_state.context_constraints = detected_context
@@ -114,7 +117,7 @@ def main():
                     st.session_state.project_config["context_constraints"] = detected_context
 
                 with st.spinner("🏗️ Architecting Story Arc (Gemini 3.0 Flash)..."):
-                    target_pages = 1 if test_mode else 10
+                    target_pages = 1 if test_mode else 100
                     
                     beat_sheet = asyncio.run(scripter.generate_beat_sheet(
                         full_text,
@@ -154,15 +157,17 @@ def main():
                 
                 with st.spinner("✍️ Writing Scene Scripts in parallel (Gemini 3.0 Flash)..."):
                     # Use the parallelized generate_script or gather write_page_script calls
-                    tasks = []
-                    for beat in beat_sheet:
-                        relevant_chapters = beat.get('relevant_chapters', [])
-                        context_text = scripter.get_chapter_text(full_text, chapter_map, relevant_chapters)
-                        tasks.append(scripter.write_page_script(
-                            beat, context_text, config['style'], config['tone'], config.get('context_constraints', "")
-                        ))
+                    async def write_full_script():
+                        tasks = []
+                        for beat in beat_sheet:
+                            relevant_chapters = beat.get('relevant_chapters', [])
+                            context_text = scripter.get_chapter_text(full_text, chapter_map, relevant_chapters)
+                            tasks.append(scripter.write_page_script(
+                                beat, context_text, config['style'], config['tone'], config.get('context_constraints', "")
+                            ))
+                        return await asyncio.gather(*tasks)
                     
-                    full_script = asyncio.run(asyncio.gather(*tasks))
+                    full_script = asyncio.run(write_full_script())
                     st.session_state.script_data = full_script
                     
                     # Save locally as expected by next steps

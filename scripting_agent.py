@@ -56,7 +56,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-3.0-flash", 
+            model="gemini-3-flash-preview", 
             contents=[prompt, full_text[:30000]], # First 30k chars usually enough for setting
         )
         
@@ -83,7 +83,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-3.0-flash", # Use 3.0 Flash for high-context analysis
+            model="gemini-3-flash-preview", # Use 3.0 Flash for high-context analysis
             contents=[prompt, full_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -177,7 +177,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-3.0-flash",
+            model="gemini-3-flash-preview",
             contents=[prompt, source_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -242,7 +242,7 @@ class ScriptingAgent:
             """
 
             response = await client.aio.models.generate_content(
-                model="gemini-3.0-flash",
+                model="gemini-3-flash-preview",
                 contents=[prompt, "SOURCE TEXT CONTEXT:\n" + source_text],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -282,7 +282,7 @@ class ScriptingAgent:
         
         # 2. THE ARCHITECT PHASE
         # If test mode, we just do 1 page.
-        target_pages = 1 if test_mode else 20
+        target_pages = 1 if test_mode else 100
         beat_sheet = await self.generate_beat_sheet(full_text, chapter_map, style, target_pages)
         
         # 3. THE SCRIBE PHASE
