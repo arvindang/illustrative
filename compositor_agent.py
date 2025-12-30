@@ -3,6 +3,7 @@ import json
 import textwrap
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from exporter_agent import ExporterAgent
 
 class CompositorAgent:
     def __init__(self, script_path: str):
@@ -216,6 +217,13 @@ class CompositorAgent:
             
         for page in script_data:
             self.assemble_page(page)
+        
+        # Packaging
+        print("📦 Packaging output...")
+        output_base = Path("assets/output") / self.script_path.stem
+        exporter = ExporterAgent(str(self.output_dir), str(output_base))
+        exporter.export_pdf()
+        exporter.export_epub(title=self.script_path.stem.replace("-", " ").title())
 
 if __name__ == "__main__":
     compositor = CompositorAgent("assets/output/20-thousand-leagues-under-the-sea_test_page.json")

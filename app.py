@@ -11,6 +11,7 @@ from scripting_agent import ScriptingAgent
 from character_architect import CharacterArchitect
 from illustrator_agent import IllustratorAgent
 from compositor_agent import CompositorAgent
+from exporter_agent import ExporterAgent
 
 load_dotenv()
 
@@ -271,7 +272,7 @@ def main():
             except Exception as e:
                 st.error(f"An error occurred: {e}")
 
-    # STEP 5: FINAL PREVIEW
+    # STEP 5: FINAL PREVIEW & EXPORT
     elif st.session_state.step == 5:
         st.header("🎉 Final Output")
         st.balloons()
@@ -280,6 +281,44 @@ def main():
         page_files = sorted(list(final_pages_dir.glob("page_*.png")))
         
         if page_files:
+            # Export Options
+            st.subheader("📦 Package & Download")
+            col_pdf, col_epub = st.columns(2)
+            
+            config = st.session_state.project_config
+            input_stem = Path(config['input_path']).stem
+            output_base = Path("assets/output") / input_stem
+            
+            exporter = ExporterAgent(str(final_pages_dir), str(output_base))
+            
+            with col_pdf:
+                if st.button("Generate PDF 📄"):
+                    with st.spinner("Creating PDF..."):
+                        pdf_path = exporter.export_pdf()
+                        if pdf_path and pdf_path.exists():
+                            with open(pdf_path, "rb") as f:
+                                st.download_button(
+                                    label="Download PDF",
+                                    data=f,
+                                    file_name=pdf_path.name,
+                                    mime="application/pdf"
+                                )
+            
+            with col_epub:
+                if st.button("Generate EPUB 📚"):
+                    with st.spinner("Creating EPUB..."):
+                        epub_path = exporter.export_epub(title=input_stem.replace("-", " ").title())
+                        if epub_path and epub_path.exists():
+                            with open(epub_path, "rb") as f:
+                                st.download_button(
+                                    label="Download EPUB",
+                                    data=f,
+                                    file_name=epub_path.name,
+                                    mime="application/epub+zip"
+                                )
+
+            st.divider()
+            st.subheader("Page Preview")
             for page in page_files:
                 st.image(str(page), caption=page.name, use_container_width=True)
         else:
