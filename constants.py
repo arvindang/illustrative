@@ -14,6 +14,7 @@ ART_STYLES = [
     "Manga/Anime",
     "Ligne Claire (Franco-Belgian)",
     "Art Nouveau",
+    "Traditional Indian Miniature",
     # Fine Art Movements
     "Impressionist",
     "Surrealist",
@@ -50,6 +51,7 @@ STYLE_DESCRIPTIONS = {
     "Manga/Anime": "Japanese comic art with dynamic motion lines and expressive characters",
     "Ligne Claire (Franco-Belgian)": "Clean line work with flat colors (Tintin/Hergé style)",
     "Art Nouveau": "Organic flowing lines with decorative elements (Mucha style)",
+    "Traditional Indian Miniature": "Intricate Mughal/Rajasthani painting style with rich colors, ornate borders, divine iconography, and gold leaf details (ideal for Mahabharata/Ramayana)",
     "Impressionist": "Soft brushstrokes emphasizing light and atmosphere",
     "Surrealist": "Dreamlike compositions with unexpected juxtapositions",
     "Expressionist": "Bold distortions expressing emotional intensity",
