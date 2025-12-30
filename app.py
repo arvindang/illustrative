@@ -144,23 +144,17 @@ def main():
                 full_text = scripter.load_content(test_mode=False)
                 chapter_map = st.session_state.chapter_map
                 
-                with st.spinner("✍️ Writing Scene Scripts (Gemini 2.0 Flash)..."):
-                    full_script = []
-                    # Progress bar for script generation
-                    progress_bar = st.progress(0)
-                    total_beats = len(beat_sheet)
-                    
-                    for i, beat in enumerate(beat_sheet):
-                        # SLIDING CONTEXT
+                with st.spinner("✍️ Writing Scene Scripts in parallel (Gemini 2.0 Flash)..."):
+                    # Use the parallelized generate_script or gather write_page_script calls
+                    tasks = []
+                    for beat in beat_sheet:
                         relevant_chapters = beat.get('relevant_chapters', [])
                         context_text = scripter.get_chapter_text(full_text, chapter_map, relevant_chapters)
-                        
-                        page_script = asyncio.run(scripter.write_page_script(
+                        tasks.append(scripter.write_page_script(
                             beat, context_text, config['style'], config['tone'], config.get('context_constraints', "")
                         ))
-                        full_script.append(page_script)
-                        progress_bar.progress((i + 1) / total_beats)
                     
+                    full_script = asyncio.run(asyncio.gather(*tasks))
                     st.session_state.script_data = full_script
                     
                     # Save locally as expected by next steps
@@ -223,11 +217,8 @@ def main():
         
         if not st.session_state.characters_designed:
             if st.button("🎨 Generate Character Sheets"):
-                progress_bar = st.progress(0)
-                for i, char in enumerate(chars):
-                    with st.spinner(f"Designing {char}..."):
-                        asyncio.run(architect.design_character(char, config['style']))
-                    progress_bar.progress((i + 1) / len(chars))
+                with st.spinner("Designing characters in parallel..."):
+                    asyncio.run(architect.design_all_characters(config['style']))
                 st.session_state.characters_designed = True
                 st.rerun()
         else:

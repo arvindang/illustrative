@@ -166,11 +166,14 @@ class IllustratorAgent:
             script_data = json.load(f)
 
         # 3. Iterate through pages and panels
+        print(f"🎨 Generating panels for {len(script_data)} pages in parallel...")
+        tasks = []
         for page in script_data:
             page_num = page['page_number']
-            print(f"\n--- Starting Page {page_num} ---")
             for panel in page['panels']:
-                await self.generate_panel(page_num, panel)
+                tasks.append(self.generate_panel(page_num, panel))
+        
+        await asyncio.gather(*tasks)
 
         # 4. Save the UPDATED script with optimized bubble positions
         # This ensures the CompositorAgent uses the vision-verified coordinates.

@@ -259,15 +259,17 @@ class ScriptingAgent:
         beat_sheet = await self.generate_beat_sheet(full_text, chapter_map, style, target_pages)
         
         # 3. THE SCRIBE PHASE
-        full_script = []
+        print(f"✍️  Scripting {len(beat_sheet)} pages in parallel...")
         
+        tasks = []
         for beat in beat_sheet:
             # SLIDING CONTEXT: Only provide text for relevant chapters
             relevant_chapters = beat.get('relevant_chapters', [])
             context_text = self.get_chapter_text(full_text, chapter_map, relevant_chapters)
             
-            page_script = await self.write_page_script(beat, context_text, style, tone, context_constraints)
-            full_script.append(page_script)
+            tasks.append(self.write_page_script(beat, context_text, style, tone, context_constraints))
+        
+        full_script = await asyncio.gather(*tasks)
 
         # Save the result
         suffix = "_test_page.json" if test_mode else "_full_script.json"
