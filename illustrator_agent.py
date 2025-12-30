@@ -17,7 +17,6 @@ IMAGE_MODEL = "gemini-3-pro-image-preview"
 
 # Image generation often has tighter RPM limits (e.g. 5-10 RPM)
 image_limiter = RateLimiter(rpm_limit=5)
-vision_limiter = RateLimiter(rpm_limit=15)
 
 class IllustratorAgent:
     def __init__(self, script_path: str, style_prompt: str):
@@ -95,6 +94,7 @@ class IllustratorAgent:
             STYLE DIRECTIVE: {self.style_prompt}
             
             PANEL VISUALS: {panel_data['visual_description']}
+            SPECIFIC ADVICE: {panel_data.get('advice', '')}
             {composition_instruction}
             
             CONTEXT (Dialogue occurring): "{panel_data['dialogue']}"
@@ -151,61 +151,10 @@ class IllustratorAgent:
                     img.save(output_path)
                     print(f"   ✅ Saved: {output_path}")
 
-                    # 5. VISION-BASED BUBBLE PLACEMENT OPTIMIZATION
-                    optimized_pos = await self.optimize_bubble_placement(output_path, bubble_pos, panel_data['dialogue'])
-                    if optimized_pos != bubble_pos:
-                        print(f"   🔄 Optimizing bubble position: {bubble_pos} -> {optimized_pos}")
-                        panel_data['bubble_position'] = optimized_pos
-                    
                     # Mark as complete in manifest
                     self.manifest.mark_panel_complete(page_num, panel_id)
                     
                     break 
-
-    @retry_with_backoff()
-    async def optimize_bubble_placement(self, image_path: Path, current_pos: str, dialogue: str):
-        """
-        Uses Gemini 2.0 Flash to analyze the generated image and pick the best corner for text.
-        """
-        async with vision_limiter:
-            image = Image.open(image_path)
-            prompt = f"""
-            Analyze this comic panel art. We need to place a speech bubble for this dialogue: "{dialogue}"
-            
-            The current planned position is: {current_pos}
-            
-            TASK:
-            Find the corner with the most 'negative space' (empty background, less detail) where a speech bubble will NOT cover any character faces, hands, or important story objects.
-            
-            Choose from: 'top-left', 'top-right', 'bottom-left', 'bottom-right'.
-            
-            Return ONLY the chosen corner name.
-            """
-            
-            # Convert PIL Image to bytes
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='PNG')
-            
-            # We use the same client but can use 2.0 Flash for speed/multimodal power
-            response = await client.aio.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[
-                    prompt,
-                    types.Part.from_bytes(
-                        data=img_byte_arr.getvalue(),
-                        mime_type='image/png'
-                    )
-                ]
-            )
-            
-            choice = response.text.strip().lower()
-            # Basic validation to ensure the model returned one of the allowed strings
-            valid_corners = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
-            for corner in valid_corners:
-                if corner in choice:
-                    return corner
-                    
-            return current_pos # Fallback
 
     async def run_production(self):
         """Main loop to process the entire script."""

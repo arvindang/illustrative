@@ -60,6 +60,10 @@ def main():
         tone = st.selectbox("Narrative Tone", 
             ["Heroic", "Suspenseful", "Melancholic", "Whimsical", "Dark Fantasy", "Educational"])
             
+        context_constraints = st.text_area("Context/Historical Constraints", 
+            value="Setting: 1860s. Use period-accurate technology (e.g. Victorian steamships, not modern aircraft carriers). Characters underwater MUST wear steampunk diving suits with copper helmets.",
+            help="Advice for the AI on historical accuracy, character gear, etc.")
+
         test_mode = st.checkbox("Test Mode (Generate 1 page/segment)", value=True)
         
         st.divider()
@@ -89,6 +93,7 @@ def main():
                     "input_path": str(input_path),
                     "style": style,
                     "tone": tone,
+                    "context_constraints": context_constraints,
                     "test_mode": test_mode
                 }
                 
@@ -151,7 +156,7 @@ def main():
                         context_text = scripter.get_chapter_text(full_text, chapter_map, relevant_chapters)
                         
                         page_script = asyncio.run(scripter.write_page_script(
-                            beat, context_text, config['style'], config['tone']
+                            beat, context_text, config['style'], config['tone'], config.get('context_constraints', "")
                         ))
                         full_script.append(page_script)
                         progress_bar.progress((i + 1) / total_beats)

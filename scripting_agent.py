@@ -180,7 +180,7 @@ class ScriptingAgent:
         return response.parsed
 
     @retry_with_backoff()
-    async def write_page_script(self, beat: dict, source_text: str, style: str, tone: str):
+    async def write_page_script(self, beat: dict, source_text: str, style: str, tone: str, context_constraints: str = ""):
         """
         THE SCRIBE: Writes the detailed panel directions for a SINGLE page based on the Beat Sheet.
         """
@@ -198,13 +198,18 @@ class ScriptingAgent:
             Style: {style}
             Tone: {tone}
             
+            GLOBAL CONTEXT & CONSTRAINTS:
+            {context_constraints}
+            
             INSTRUCTIONS:
             Write the script for Page {beat['page_number']}.
             - Break this specific scene into 1-6 panels.
             - Ensure a logical visual flow (Z-pattern).
             - VISUAL DESCRIPTION: Must be highly descriptive for an AI image generator (mention lighting, angles, colors).
-            - DIALOGUE: Keep it punchy. Use standard comic conventions.
+            - DIALOGUE: Keep it punchy. Use standard comic conventions. 
+              CRITICAL: Do NOT include character names like "Narrator:" or "Nemo:" in the dialogue string. ONLY provide the text to be spoken or narrated.
             - BUBBLE POSITION: Ensure text doesn't cover faces.
+            - ADVICE: Provide a brief "advice" string for each panel regarding historical accuracy, character gear, or specific logic (e.g., "Ensure characters have diving suits", "No modern ships").
             
             Reference the Source Text provided to maintain character voice, but feel free to abridge dialogue significantly.
             """
@@ -227,10 +232,11 @@ class ScriptingAgent:
                                         "panel_id": {"type": "INTEGER"},
                                         "visual_description": {"type": "STRING"},
                                         "dialogue": {"type": "STRING"},
+                                        "advice": {"type": "STRING"},
                                         "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
                                         "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
                                     },
-                                    "required": ["panel_id", "visual_description", "dialogue", "characters", "bubble_position"]
+                                    "required": ["panel_id", "visual_description", "dialogue", "advice", "characters", "bubble_position"]
                                 }
                             }
                         },
@@ -240,7 +246,7 @@ class ScriptingAgent:
             )
             return response.parsed
 
-    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True):
+    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True, context_constraints: str = ""):
         full_text = self.load_content(test_mode=False) # Always load full for map
         
         # 1. THE MAPPER PHASE
@@ -260,7 +266,7 @@ class ScriptingAgent:
             relevant_chapters = beat.get('relevant_chapters', [])
             context_text = self.get_chapter_text(full_text, chapter_map, relevant_chapters)
             
-            page_script = await self.write_page_script(beat, context_text, style, tone)
+            page_script = await self.write_page_script(beat, context_text, style, tone, context_constraints)
             full_script.append(page_script)
 
         # Save the result
