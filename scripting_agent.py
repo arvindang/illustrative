@@ -326,7 +326,7 @@ class ScriptingAgent:
             
             raise last_error
 
-    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True, context_constraints: str = ""):
+    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
         # Save the result
         suffix = "_test_page.json" if test_mode else "_full_script.json"
         output_file = self.output_dir / f"{self.book_path.stem}{suffix}"
@@ -337,14 +337,33 @@ class ScriptingAgent:
                 return json.load(f)
 
         full_text = self.load_content(test_mode=False) # Always load full for map
-        
+
+        # Calculate optimal page count
+        from utils import calculate_page_count
+        word_count = len(full_text.split())
+
+        page_calc = calculate_page_count(
+            word_count=word_count,
+            test_mode=test_mode,
+            user_override=target_page_override
+        )
+
+        # Display calculation
+        print(f"\n📊 Input Analysis:")
+        print(f"   Words: {word_count:,}")
+        print(f"   Category: {page_calc['density_category']}")
+        print(f"   Target pages: {page_calc['recommended']} (range: {page_calc['minimum']}-{page_calc['maximum']})")
+        print(f"   Est. time: ~{page_calc['estimated_time_minutes']} min")
+        if page_calc['warning']:
+            print(f"   ⚠️  {page_calc['warning']}\n")
+
+        target_pages = page_calc['recommended']
+
         # 1. THE MAPPER PHASE
         # We generate a chapter map to help slice the story
         chapter_map = await self.generate_chapter_map(full_text)
-        
+
         # 2. THE ARCHITECT PHASE
-        # If test mode, we do 3 pages.
-        target_pages = 3 if test_mode else 100
         beat_sheet = await self.generate_beat_sheet(full_text, chapter_map, style, target_pages)
         
         # 3. THE SCRIBE PHASE

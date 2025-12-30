@@ -71,3 +71,23 @@ TONE_DESCRIPTIONS = {
     "Cosmic Horror": "Existential dread and unknowable cosmic forces",
     "Gothic": "Atmospheric psychological horror with decaying settings",
 }
+
+# Page count limits
+MIN_PAGES_PRODUCTION = 10
+MAX_PAGES_PRODUCTION = 200
+RECOMMENDED_MAX_PAGES = 150  # Quality/time sweet spot
+
+MIN_PAGES_TEST = 1
+MAX_PAGES_TEST = 10
+DEFAULT_PAGES_TEST = 3
+
+# Word density thresholds (words per page)
+DENSITY_SHORT_STORY = 500    # < 20k words
+DENSITY_NOVELLA = 750        # 20k-50k words
+DENSITY_NOVEL = 1000         # 50k-120k words
+DENSITY_EPIC = 1200          # > 120k words
+
+# Word count category thresholds
+BRACKET_SHORT = 20_000
+BRACKET_NOVELLA = 50_000
+BRACKET_NOVEL = 120_000
