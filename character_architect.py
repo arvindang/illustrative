@@ -29,13 +29,11 @@ class CharacterArchitect:
         """
         Normalizes character names to handle variants and duplicates.
         Returns canonical name and folder-safe name.
-
-        Examples:
-        - "Captain Nemo" and "Nemo" → "Captain Nemo"
-        - "Professor Aronnax", "Pierre Aronnax", "Aronnax" → "Professor Aronnax"
         """
-        if not name or name.lower() in ["none", "null", ""]:
+        if not name:
             return None, None
+            
+        name_lower = name.lower().strip()        
 
         # Common titles to detect
         titles = ["captain", "professor", "doctor", "dr", "mr", "mrs", "miss", "sir", "lord", "lady"]

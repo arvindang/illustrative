@@ -260,6 +260,11 @@ class ScriptingAgent:
             - DIALOGUE: Keep it punchy. Use standard comic conventions.
               CRITICAL: Do NOT include character names like "Narrator:" or "Nemo:" in the dialogue string. ONLY provide the text to be spoken or narrated.
             - BUBBLE POSITION: Ensure text doesn't cover faces.
+            - CHARACTERS: Provide a list of SPECIFIC sentient characters present in the panel. 
+              * DO NOT include objects (e.g., "Nautilus", "Ship", "Harpoon").
+              * DO NOT include animals unless they are primary characters.
+              * If no characters are present, return an empty list []. 
+              * DO NOT use placeholders like "none" or "no characters".
             - ADVICE: Provide structured guidance for each panel with three categories:
               * continuity_notes: What props, clothing, or positions carry over from previous panels (e.g., "Nemo holding sextant from panel 2")
               * historical_constraints: Era-specific requirements and technology limitations (e.g., "1866, no modern tech visible")

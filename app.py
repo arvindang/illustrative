@@ -16,6 +16,19 @@ from continuity_validator import ContinuityValidator
 
 load_dotenv()
 
+# Event Loop Management for Streamlit
+def get_event_loop():
+    """Get or create an event loop for Streamlit session"""
+    if 'event_loop' not in st.session_state:
+        st.session_state.event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(st.session_state.event_loop)
+    return st.session_state.event_loop
+
+def run_async(coro):
+    """Run an async coroutine using the session's event loop"""
+    loop = get_event_loop()
+    return loop.run_until_complete(coro)
+
 # Page Configuration
 st.set_page_config(page_title="LegendLens AI", page_icon="📚", layout="wide")
 
@@ -109,7 +122,7 @@ def main():
                             scripter.analyze_global_context(full_text)
                         )
                     
-                    chapter_map, detected_context = asyncio.run(setup_story())
+                    chapter_map, detected_context = run_async(setup_story())
                     
                     st.session_state.chapter_map = chapter_map
                     st.session_state.context_constraints = detected_context
@@ -120,10 +133,10 @@ def main():
                 with st.spinner("🏗️ Architecting Story Arc (Gemini 3.0 Flash)..."):
                     target_pages = 1 if test_mode else 100
                     
-                    beat_sheet = asyncio.run(scripter.generate_beat_sheet(
+                    beat_sheet = run_async(scripter.generate_beat_sheet(
                         full_text,
-                        chapter_map=st.session_state.chapter_map, 
-                        style=style, 
+                        chapter_map=st.session_state.chapter_map,
+                        style=style,
                         target_page_count=target_pages
                     ))
                     
@@ -168,7 +181,7 @@ def main():
                             ))
                         return await asyncio.gather(*tasks)
                     
-                    full_script = asyncio.run(write_full_script())
+                    full_script = run_async(write_full_script())
                     st.session_state.script_data = full_script
                     
                     # Save locally as expected by next steps
@@ -232,7 +245,7 @@ def main():
         if not st.session_state.characters_designed:
             if st.button("🎨 Generate Character Sheets"):
                 with st.spinner("Designing characters in parallel..."):
-                    asyncio.run(architect.design_all_characters(config['style']))
+                    run_async(architect.design_all_characters(config['style']))
                 st.session_state.characters_designed = True
                 st.rerun()
         else:
@@ -346,7 +359,7 @@ def main():
             
             # We wrap the asyncio call
             try:
-                asyncio.run(illustrator.run_production())
+                run_async(illustrator.run_production())
                 status_container.update(label="Illustration Complete!", state="running", expanded=False)
                 
                 # 2. Composition
