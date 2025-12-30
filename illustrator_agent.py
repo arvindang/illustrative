@@ -14,6 +14,7 @@ load_dotenv()
 # Initialize Gemini Client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 IMAGE_MODEL = "gemini-3-pro-image-preview"
+FALLBACK_IMAGE_MODEL = "gemini-2.5-flash-image"
 
 # Image generation often has tighter RPM limits (e.g. 5-10 RPM)
 image_limiter = RateLimiter(rpm_limit=5)
@@ -33,6 +34,7 @@ class IllustratorAgent:
         # In-memory bank of loaded PIL reference images
         self.character_bank = {} 
         self.character_bank_metadata = {}
+        self.current_model = IMAGE_MODEL
 
     def load_character_bank(self):
         """
@@ -64,6 +66,17 @@ class IllustratorAgent:
                             self.character_bank[char_name] = ref_images
                             print(f"  ✅ Loaded {len(ref_images)} references for: {char_name}")
         print("--- Character Bank Ready ---")
+
+    async def _call_generate_content(self, model_name: str, input_contents: list):
+        """Helper to call the API with a specific model."""
+        return await client.aio.models.generate_content(
+            model=model_name,
+            contents=input_contents,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(aspect_ratio="4:3") 
+            )
+        )
 
     @retry_with_backoff(max_retries=3) # Image generation can be more brittle
     async def generate_panel(self, page_num: int, panel_data: dict):
@@ -116,7 +129,6 @@ class IllustratorAgent:
                     chars_included.append(char_name)
                     
                     # Add visual constant description if available
-                    # We need to find the metadata. I'll modify load_character_bank to store it.
                     desc = self.character_bank_metadata.get(char_name, {}).get('visual_style_string', "")
                     if desc:
                         char_descriptions.append(f"CHARACTER {char_name}: {desc}")
@@ -130,15 +142,18 @@ class IllustratorAgent:
             if chars_included:
                 print(f"   (Including references for: {', '.join(chars_included)})")
 
-            # 3. Call the API
-            response = await client.aio.models.generate_content(
-                model=IMAGE_MODEL,
-                contents=input_contents,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                    image_config=types.ImageConfig(aspect_ratio="4:3") 
-                )
-            )
+            # 3. Call the API with Fallback Logic
+            try:
+                response = await self._call_generate_content(self.current_model, input_contents)
+            except Exception as e:
+                # Check for 429 Resource Exhausted (specifically daily limit)
+                error_msg = str(e).lower()
+                if "429" in error_msg and self.current_model != FALLBACK_IMAGE_MODEL:
+                    print(f"⚠️ Primary model {self.current_model} exhausted quota. Falling back to {FALLBACK_IMAGE_MODEL}...")
+                    self.current_model = FALLBACK_IMAGE_MODEL
+                    response = await self._call_generate_content(self.current_model, input_contents)
+                else:
+                    raise e
 
             # 4. Save the output
             page_dir = self.output_base_dir / f"page_{page_num}"
@@ -149,7 +164,7 @@ class IllustratorAgent:
                     img = part.as_image()
                     output_path = page_dir / f"panel_{panel_id}.png"
                     img.save(output_path)
-                    print(f"   ✅ Saved: {output_path}")
+                    print(f"   ✅ Saved: {output_path} (via {self.current_model})")
 
                     # Mark as complete in manifest
                     self.manifest.mark_panel_complete(page_num, panel_id)
