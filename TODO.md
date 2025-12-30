@@ -13,7 +13,8 @@
 ## Phase 3: Batch & Layout (Week 3)
 - [ ] Integrate Gemini Batch API for cost-effective generation.
 - [ ] Create `Compositor` using Pillow to draw speech bubbles over images.
-- [ ] Implement PDF export via ReportLab.
+- [x] Implement PDF export via ReportLab.
+- [x] Implement Fixed-Layout EPUB export via EbookLib.
 
 ## Phase 4: Polish (Week 4)
 - [ ] Build a Streamlit UI for non-technical testing.
