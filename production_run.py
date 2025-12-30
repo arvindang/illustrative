@@ -11,8 +11,8 @@ async def run_production():
     print("🚀 Starting 100-Page Production Run...")
     
     input_file = "assets/input/20-thousand-leagues-under-the-sea.txt"
-    style = "Botanical Illustration"
-    tone = "Melancholic"
+    style = "Art Nouveau"  # Try: "Manga/Anime", "Chiaroscuro", "Vintage Pulp", etc.
+    tone = "Romantic"  # Try: "Philosophical", "Cosmic Horror", "Gothic", etc.
     
     # 1. Scripting (Production Mode = 100 pages)
     print("\n--- STEP 1: SCRIPTING ---")
