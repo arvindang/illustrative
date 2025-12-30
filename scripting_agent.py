@@ -150,7 +150,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=[prompt, source_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -215,7 +215,7 @@ class ScriptingAgent:
             """
 
             response = await client.aio.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=[prompt, "SOURCE TEXT CONTEXT:\n" + source_text],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
