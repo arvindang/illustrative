@@ -76,7 +76,34 @@ def main():
         tone = st.selectbox("Narrative Tone", NARRATIVE_TONES)
             
         test_mode = st.checkbox("Test Mode (Generate 1 page/segment)", value=True)
-        
+
+        # Advanced page count controls
+        with st.expander("📊 Page Count Settings (Optional)", expanded=False):
+            st.markdown("Auto mode calculates pages based on book length. Use Custom to set a specific count.")
+
+            page_mode = st.radio(
+                "Mode",
+                options=["Auto (Recommended)", "Custom"],
+                index=0,
+                horizontal=True
+            )
+
+            if page_mode == "Custom":
+                if test_mode:
+                    st.info("Test mode always uses 1-3 pages.")
+                else:
+                    custom_pages = st.number_input(
+                        "Pages to generate",
+                        min_value=10,
+                        max_value=200,
+                        value=100,
+                        step=5,
+                        help="Set specific page count. You'll see recommendations after uploading."
+                    )
+                    st.session_state.custom_page_count = custom_pages
+            else:
+                st.session_state.custom_page_count = None
+
         st.divider()
         if st.button("🔄 Reset Project"):
             reset_pipeline()
@@ -129,16 +156,42 @@ def main():
                     # Update config with the detected context
                     st.session_state.project_config["context_constraints"] = detected_context
 
-                with st.spinner("🏗️ Architecting Story Arc (Gemini 3.0 Flash)..."):
-                    target_pages = 1 if test_mode else 100
-                    
+                with st.spinner("🏗️ Architecting Story Arc..."):
+                    from utils import calculate_page_count
+
+                    word_count = len(full_text.split())
+
+                    # Calculate page count
+                    page_calc = calculate_page_count(
+                        word_count=word_count,
+                        test_mode=test_mode,
+                        user_override=st.session_state.get('custom_page_count')
+                    )
+
+                    # Display to user
+                    st.markdown("**📊 Project Scope**")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Input", f"{word_count:,} words")
+                        st.caption(f"Category: {page_calc['density_category']}")
+                    with col2:
+                        st.metric("Pages", page_calc['recommended'])
+                        st.caption(f"Range: {page_calc['minimum']}-{page_calc['maximum']}")
+
+                    st.info(f"⏱️ Estimated time: ~{page_calc['estimated_time_minutes']} minutes")
+
+                    if page_calc['warning']:
+                        st.warning(page_calc['warning'])
+
+                    target_pages = page_calc['recommended']
+
                     beat_sheet = run_async(scripter.generate_beat_sheet(
                         full_text,
                         chapter_map=st.session_state.chapter_map,
                         style=style,
                         target_page_count=target_pages
                     ))
-                    
+
                     st.session_state.beat_sheet_data = beat_sheet
                     st.session_state.step = 1.5
                     st.rerun()
