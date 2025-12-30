@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import io
 from pathlib import Path
 from PIL import Image
 from dotenv import load_dotenv
@@ -126,12 +127,66 @@ class IllustratorAgent:
                     output_path = page_dir / f"panel_{panel_id}.png"
                     img.save(output_path)
                     print(f"   ✅ Saved: {output_path}")
+
+                    # 5. VISION-BASED BUBBLE PLACEMENT OPTIMIZATION
+                    # Use Gemini 2.0 Flash to "see" the image and confirm/adjust bubble placement
+                    optimized_pos = await self.optimize_bubble_placement(output_path, bubble_pos, panel_data['dialogue'])
+                    if optimized_pos != bubble_pos:
+                        print(f"   🔄 Optimizing bubble position: {bubble_pos} -> {optimized_pos}")
+                        panel_data['bubble_position'] = optimized_pos
+                    
                     # We only expect one image per generation call
                     break 
 
         except Exception as e:
             print(f"❌ Error generating panel {panel_id}: {e}")
-            # In a production batch system, you would implement retry logic here.
+
+    async def optimize_bubble_placement(self, image_path: Path, current_pos: str, dialogue: str):
+        """
+        Uses Gemini 2.0 Flash to analyze the generated image and pick the best corner for text.
+        """
+        image = Image.open(image_path)
+        prompt = f"""
+        Analyze this comic panel art. We need to place a speech bubble for this dialogue: "{dialogue}"
+        
+        The current planned position is: {current_pos}
+        
+        TASK:
+        Find the corner with the most 'negative space' (empty background, less detail) where a speech bubble will NOT cover any character faces, hands, or important story objects.
+        
+        Choose from: 'top-left', 'top-right', 'bottom-left', 'bottom-right'.
+        
+        Return ONLY the chosen corner name.
+        """
+        
+        # Convert PIL Image to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        
+        try:
+            # We use the same client but can use 2.0 Flash for speed/multimodal power
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(
+                        data=img_byte_arr.getvalue(),
+                        mime_type='image/png'
+                    )
+                ]
+            )
+            
+            choice = response.text.strip().lower()
+            # Basic validation to ensure the model returned one of the allowed strings
+            valid_corners = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+            for corner in valid_corners:
+                if corner in choice:
+                    return corner
+                    
+            return current_pos # Fallback
+        except Exception as e:
+            print(f"   ⚠️ Vision check failed: {e}")
+            return current_pos
 
     async def run_production(self):
         """Main loop to process the entire script."""
@@ -143,16 +198,18 @@ class IllustratorAgent:
             script_data = json.load(f)
 
         # 3. Iterate through pages and panels
-        # NOTE: In a massive batch scenario, use a task queue (like Celery) here 
-        # instead of a simple loop to avoid timeouts.
         for page in script_data:
             page_num = page['page_number']
             print(f"\n--- Starting Page {page_num} ---")
-            # Process panels sequentially so we don't hit rate limits instantly
             for panel in page['panels']:
                 await self.generate_panel(page_num, panel)
-                # Optional: small sleep to be nice to the API if not using Batch API endpoint
-                # await asyncio.sleep(1) 
+
+        # 4. Save the UPDATED script with optimized bubble positions
+        # This ensures the CompositorAgent uses the vision-verified coordinates.
+        optimized_script_path = self.script_path.parent / (self.script_path.stem + "_optimized.json")
+        with open(optimized_script_path, "w") as f:
+            json.dump(script_data, f, indent=2)
+        print(f"\n✅ Production Complete! Optimized script saved to: {optimized_script_path}")
 
 if __name__ == "__main__":
     # Configuration
