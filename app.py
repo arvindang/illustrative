@@ -31,6 +31,8 @@ def init_session_state():
         st.session_state.script_data = None
     if 'characters_designed' not in st.session_state:
         st.session_state.characters_designed = False
+    if 'context_constraints' not in st.session_state:
+        st.session_state.context_constraints = "Setting: 1860s. Use period-accurate technology (e.g. Victorian steamships, not modern aircraft carriers). Characters underwater MUST wear steampunk diving suits with copper helmets."
 
 def reset_pipeline():
     st.session_state.step = 1
@@ -60,10 +62,6 @@ def main():
         tone = st.selectbox("Narrative Tone", 
             ["Heroic", "Suspenseful", "Melancholic", "Whimsical", "Dark Fantasy", "Educational"])
             
-        context_constraints = st.text_area("Context/Historical Constraints", 
-            value="Setting: 1860s. Use period-accurate technology (e.g. Victorian steamships, not modern aircraft carriers). Characters underwater MUST wear steampunk diving suits with copper helmets.",
-            help="Advice for the AI on historical accuracy, character gear, etc.")
-
         test_mode = st.checkbox("Test Mode (Generate 1 page/segment)", value=True)
         
         st.divider()
@@ -100,10 +98,20 @@ def main():
                 # Run Architect Phase
                 scripter = ScriptingAgent(str(input_path))
                 
-                with st.spinner("🗺️ Mapping Chapters (Gemini 1.5 Pro)..."):
+                with st.spinner("🗺️ Mapping Chapters & Detecting Context (Gemini 1.5 Pro)..."):
                     full_text = scripter.load_content(test_mode=False)
-                    chapter_map = asyncio.run(scripter.generate_chapter_map(full_text))
+                    
+                    # Parallelize mapping and context analysis
+                    chapter_map_task = scripter.generate_chapter_map(full_text)
+                    context_task = scripter.analyze_global_context(full_text)
+                    
+                    chapter_map, detected_context = asyncio.run(asyncio.gather(chapter_map_task, context_task))
+                    
                     st.session_state.chapter_map = chapter_map
+                    st.session_state.context_constraints = detected_context
+                    
+                    # Update config with the detected context
+                    st.session_state.project_config["context_constraints"] = detected_context
 
                 with st.spinner("🏗️ Architecting Story Arc (Gemini 2.0 Flash)..."):
                     target_pages = 1 if test_mode else 10

@@ -36,6 +36,33 @@ class ScriptingAgent:
             return full_text
 
     @retry_with_backoff()
+    async def analyze_global_context(self, full_text: str):
+        """
+        Act as a Production Designer. Analyze the text to determine the 
+        setting, era, technology level, and specific visual requirements.
+        """
+        print("🔍 Analyzing Global Context & Historical Constraints...")
+        prompt = """
+        Act as a Production Designer and Historical Consultant for a Graphic Novel adaptation.
+        Analyze the provided text and extract a concise 'Production Bible' of constraints.
+        
+        Focus on:
+        1. Setting/Era (e.g., 1860s Victorian).
+        2. Technology level (e.g., Steam-powered, specific gear mentioned).
+        3. Visual Constants (e.g., "Nautilus must look like a sea monster", "Diving suits are copper").
+        4. Atmospheric details.
+
+        OUTPUT: A single string (2-4 sentences) that summarizes these constraints for a creative team.
+        """
+        
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash", 
+            contents=[prompt, full_text[:30000]], # First 30k chars usually enough for setting
+        )
+        
+        return response.text.strip()
+
+    @retry_with_backoff()
     async def generate_chapter_map(self, full_text: str):
         """
         Creates a high-level map of the book to help with contextual slicing.
@@ -209,7 +236,7 @@ class ScriptingAgent:
             - DIALOGUE: Keep it punchy. Use standard comic conventions. 
               CRITICAL: Do NOT include character names like "Narrator:" or "Nemo:" in the dialogue string. ONLY provide the text to be spoken or narrated.
             - BUBBLE POSITION: Ensure text doesn't cover faces.
-            - ADVICE: Provide a brief "advice" string for each panel regarding historical accuracy, character gear, or specific logic (e.g., "Ensure characters have diving suits", "No modern ships").
+            - ADVICE: Provide a brief "advice" string for each panel regarding VISUAL CONTINUITY (e.g., "Nemo should still be holding the sextant from the previous panel/page"), historical accuracy (e.g., "The year is 1866, ensure no modern technology is visible"), character gear, or specific logic.
             
             Reference the Source Text provided to maintain character voice, but feel free to abridge dialogue significantly.
             """
