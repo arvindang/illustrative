@@ -13,6 +13,7 @@ from illustrator_agent import IllustratorAgent
 from compositor_agent import CompositorAgent
 from exporter_agent import ExporterAgent
 from continuity_validator import ContinuityValidator
+from constants import ART_STYLES, NARRATIVE_TONES
 
 load_dotenv()
 
@@ -70,11 +71,9 @@ def main():
             st.info("Please add it to your .env file.")
             st.stop()
             
-        style = st.selectbox("Art Style", 
-            ["Lush Watercolor", "Gritty Noir", "Classic Comic Book", "Ukiyo-e Woodblock", "Cyberpunk Neon", "Botanical Illustration"])
-        
-        tone = st.selectbox("Narrative Tone", 
-            ["Heroic", "Suspenseful", "Melancholic", "Whimsical", "Dark Fantasy", "Educational"])
+        style = st.selectbox("Art Style", ART_STYLES)
+
+        tone = st.selectbox("Narrative Tone", NARRATIVE_TONES)
             
         test_mode = st.checkbox("Test Mode (Generate 1 page/segment)", value=True)
         

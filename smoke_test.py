@@ -11,8 +11,8 @@ async def run_smoke_test():
     print("🚀 Starting Micro-Book Smoke Test...")
     
     input_file = "assets/input/20-thousand-leagues-under-the-sea.txt"
-    style = "Lush Watercolor"
-    tone = "Melancholic"
+    style = "Manga/Anime"  # Try: "Ligne Claire (Franco-Belgian)", "Expressionist", "Sketch/Pencil Drawing", etc.
+    tone = "Philosophical"  # Try: "Satirical", "Tragic", "Noir Detective", etc.
     
     # 1. Scripting (Test Mode = 1 page)
     print("\n--- STEP 1: SCRIPTING ---")
