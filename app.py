@@ -98,7 +98,7 @@ def main():
                 # Run Architect Phase
                 scripter = ScriptingAgent(str(input_path))
                 
-                with st.spinner("🗺️ Mapping Chapters & Detecting Context (Gemini 1.5 Pro)..."):
+                with st.spinner("🗺️ Mapping Chapters & Detecting Context (Gemini 3.0 Flash)..."):
                     full_text = scripter.load_content(test_mode=False)
                     
                     # Parallelize mapping and context analysis
@@ -113,7 +113,7 @@ def main():
                     # Update config with the detected context
                     st.session_state.project_config["context_constraints"] = detected_context
 
-                with st.spinner("🏗️ Architecting Story Arc (Gemini 2.0 Flash)..."):
+                with st.spinner("🏗️ Architecting Story Arc (Gemini 3.0 Flash)..."):
                     target_pages = 1 if test_mode else 10
                     
                     beat_sheet = asyncio.run(scripter.generate_beat_sheet(
@@ -152,7 +152,7 @@ def main():
                 full_text = scripter.load_content(test_mode=False)
                 chapter_map = st.session_state.chapter_map
                 
-                with st.spinner("✍️ Writing Scene Scripts in parallel (Gemini 2.0 Flash)..."):
+                with st.spinner("✍️ Writing Scene Scripts in parallel (Gemini 3.0 Flash)..."):
                     # Use the parallelized generate_script or gather write_page_script calls
                     tasks = []
                     for beat in beat_sheet:

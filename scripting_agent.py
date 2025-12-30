@@ -56,7 +56,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash", 
+            model="gemini-3.0-flash", 
             contents=[prompt, full_text[:30000]], # First 30k chars usually enough for setting
         )
         
@@ -67,7 +67,7 @@ class ScriptingAgent:
         """
         Creates a high-level map of the book to help with contextual slicing.
         """
-        print("🗺️  Generating Chapter Map (Gemini 2.5 Pro)...")
+        print("🗺️  Generating Chapter Map (Gemini 3.0 Flash)...")
         prompt = """
         Act as a Literary Analyst. Analyze the provided book text.
         Break the book down into logical chapters or segments.
@@ -83,7 +83,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-pro", # Use Pro for high-context analysis
+            model="gemini-3.0-flash", # Use 3.0 Flash for high-context analysis
             contents=[prompt, full_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -177,7 +177,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.0-flash",
             contents=[prompt, source_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -242,7 +242,7 @@ class ScriptingAgent:
             """
 
             response = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.0-flash",
                 contents=[prompt, "SOURCE TEXT CONTEXT:\n" + source_text],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",

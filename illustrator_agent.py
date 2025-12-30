@@ -13,7 +13,7 @@ load_dotenv()
 
 # Initialize Gemini Client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-IMAGE_MODEL = "gemini-3-pro-image-preview"
+IMAGE_MODEL = "gemini-3.0-pro-image"
 
 # Image generation often has tighter RPM limits (e.g. 5-10 RPM)
 image_limiter = RateLimiter(rpm_limit=5)
