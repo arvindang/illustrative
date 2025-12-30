@@ -93,14 +93,19 @@ class CharacterArchitect:
             print(f"✅ {char_name} designed! Assets saved in: {char_folder}")
             return metadata
 
+    async def design_all_characters(self, style: str):
+        """Extracts and designs all characters in the script concurrently."""
+        chars = self.get_main_characters()
+        print(f"👥 Designing {len(chars)} characters in parallel...")
+        tasks = [self.design_character(char, style) for char in chars]
+        return await asyncio.gather(*tasks)
+
 if __name__ == "__main__":
     import asyncio
     # Point this to the script we generated in the previous step
     architect = CharacterArchitect("assets/output/20-thousand-leagues-under-the-sea_test_page.json")
     
     async def run():
-        chars = architect.get_main_characters()
-        for char in chars:
-            await architect.design_character(char, style="Lush Watercolor")
+        await architect.design_all_characters(style="Lush Watercolor")
             
     asyncio.run(run())
