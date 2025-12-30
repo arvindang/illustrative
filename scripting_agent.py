@@ -40,7 +40,7 @@ class ScriptingAgent:
         """
         Creates a high-level map of the book to help with contextual slicing.
         """
-        print("🗺️  Generating Chapter Map (Gemini 1.5 Pro)...")
+        print("🗺️  Generating Chapter Map (Gemini 2.5 Pro)...")
         prompt = """
         Act as a Literary Analyst. Analyze the provided book text.
         Break the book down into logical chapters or segments.
