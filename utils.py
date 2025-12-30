@@ -50,10 +50,12 @@ class RateLimiter:
     A simple semaphore-based rate limiter to prevent exceeding RPM limits.
     """
     def __init__(self, rpm_limit=15):
-        self.semaphore = asyncio.Semaphore(rpm_limit)
+        self.semaphore = None
         self.rpm_limit = rpm_limit
 
     async def __aenter__(self):
+        if self.semaphore is None:
+            self.semaphore = asyncio.Semaphore(self.rpm_limit)
         await self.semaphore.acquire()
         return self
 

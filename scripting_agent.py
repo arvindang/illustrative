@@ -11,7 +11,7 @@ load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 # Using a semaphore to throttle the scribe phase
-scribe_limiter = RateLimiter(rpm_limit=10)
+scribe_limiter = RateLimiter(rpm_limit=5)
 
 class ScriptingAgent:
     def __init__(self, book_path: str):
@@ -41,6 +41,12 @@ class ScriptingAgent:
         Act as a Production Designer. Analyze the text to determine the 
         setting, era, technology level, and specific visual requirements.
         """
+        context_file = self.output_dir / f"{self.book_path.stem}_context.txt"
+        if context_file.exists():
+            print("⏭️  Skipping Global Context Analysis (Already exists)")
+            with open(context_file, "r") as f:
+                return f.read().strip()
+
         print("🔍 Analyzing Global Context & Historical Constraints...")
         prompt = """
         Act as a Production Designer and Historical Consultant for a Graphic Novel adaptation.
@@ -60,13 +66,22 @@ class ScriptingAgent:
             contents=[prompt, full_text[:30000]], # First 30k chars usually enough for setting
         )
         
-        return response.text.strip()
+        context = response.text.strip()
+        with open(context_file, "w") as f:
+            f.write(context)
+        return context
 
     @retry_with_backoff()
     async def generate_chapter_map(self, full_text: str):
         """
         Creates a high-level map of the book to help with contextual slicing.
         """
+        chapter_map_path = self.output_dir / f"{self.book_path.stem}_chapter_map.json"
+        if chapter_map_path.exists():
+            print("⏭️  Skipping Chapter Map Generation (Already exists)")
+            with open(chapter_map_path, "r") as f:
+                return json.load(f)
+
         print("🗺️  Generating Chapter Map (Gemini 3.0 Flash)...")
         prompt = """
         Act as a Literary Analyst. Analyze the provided book text.
@@ -149,6 +164,15 @@ class ScriptingAgent:
         THE ARCHITECT: break the story down into a page-by-page outline.
         Uses the Chapter Map to ensure global coverage.
         """
+        beat_sheet_path = self.output_dir / f"{self.book_path.stem}_beat_sheet.json"
+        if beat_sheet_path.exists():
+            # Check if existing beat sheet matches the target page count
+            with open(beat_sheet_path, "r") as f:
+                existing_beat_sheet = json.load(f)
+                if len(existing_beat_sheet) == target_page_count:
+                    print(f"⏭️  Skipping Beat Sheet Generation (Already exists with {target_page_count} pages)")
+                    return existing_beat_sheet
+
         print(f"🏗️  Architecting story structure (Target: {target_page_count} pages)...")
         
         chapter_summary = json.dumps(chapter_map, indent=2)
@@ -241,39 +265,61 @@ class ScriptingAgent:
             Reference the Source Text provided to maintain character voice, but feel free to abridge dialogue significantly.
             """
 
-            response = await client.aio.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=[prompt, "SOURCE TEXT CONTEXT:\n" + source_text],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema={
-                        "type": "OBJECT",
-                        "properties": {
-                            "page_number": {"type": "INTEGER"},
-                            "layout_style": {"type": "STRING", "enum": ["cinematic_widescreen", "action_dynamic", "standard_grid", "dialogue_focus", "full_splash"]},
-                            "panels": {
-                                "type": "ARRAY",
-                                "items": {
-                                    "type": "OBJECT",
-                                    "properties": {
-                                        "panel_id": {"type": "INTEGER"},
-                                        "visual_description": {"type": "STRING"},
-                                        "dialogue": {"type": "STRING"},
-                                        "advice": {"type": "STRING"},
-                                        "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
-                                        "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
-                                    },
-                                    "required": ["panel_id", "visual_description", "dialogue", "advice", "characters", "bubble_position"]
-                                }
+            models_to_try = ["gemini-3-flash-preview", "gemini-2.0-flash"]
+            last_error = None
+
+            for model_name in models_to_try:
+                try:
+                    response = await client.aio.models.generate_content(
+                        model=model_name,
+                        contents=[prompt, "SOURCE TEXT CONTEXT:\n" + source_text],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema={
+                                "type": "OBJECT",
+                                "properties": {
+                                    "page_number": {"type": "INTEGER"},
+                                    "layout_style": {"type": "STRING", "enum": ["cinematic_widescreen", "action_dynamic", "standard_grid", "dialogue_focus", "full_splash"]},
+                                    "panels": {
+                                        "type": "ARRAY",
+                                        "items": {
+                                            "type": "OBJECT",
+                                            "properties": {
+                                                "panel_id": {"type": "INTEGER"},
+                                                "visual_description": {"type": "STRING"},
+                                                "dialogue": {"type": "STRING"},
+                                                "advice": {"type": "STRING"},
+                                                "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                                "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
+                                            },
+                                            "required": ["panel_id", "visual_description", "dialogue", "advice", "characters", "bubble_position"]
+                                        }
+                                    }
+                                },
+                                "required": ["page_number", "panels"]
                             }
-                        },
-                        "required": ["page_number", "panels"]
-                    }
-                )
-            )
-            return response.parsed
+                        )
+                    )
+                    return response.parsed
+                except Exception as e:
+                    last_error = e
+                    if "429" in str(e):
+                        print(f"⚠️ Model {model_name} rate limited on Page {beat['page_number']}. Trying fallback...")
+                        continue
+                    raise e
+            
+            raise last_error
 
     async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True, context_constraints: str = ""):
+        # Save the result
+        suffix = "_test_page.json" if test_mode else "_full_script.json"
+        output_file = self.output_dir / f"{self.book_path.stem}{suffix}"
+        
+        if output_file.exists():
+            print(f"⏭️  Skipping Full Script Generation (Already exists: {output_file})")
+            with open(output_file, "r") as f:
+                return json.load(f)
+
         full_text = self.load_content(test_mode=False) # Always load full for map
         
         # 1. THE MAPPER PHASE
