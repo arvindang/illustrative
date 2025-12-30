@@ -262,7 +262,12 @@ def main():
                 
                 # 2. Composition
                 status_container.write("📐 Assembling Final Pages...")
-                compositor = CompositorAgent(str(script_path))
+                
+                # Check for optimized script (vision-verified bubble placements)
+                optimized_script = script_path.parent / f"{script_path.stem}_optimized.json"
+                final_script_path = str(optimized_script) if optimized_script.exists() else str(script_path)
+                
+                compositor = CompositorAgent(final_script_path)
                 compositor.run()
                 
                 status_container.update(label="✅ Production Complete!", state="complete", expanded=False)

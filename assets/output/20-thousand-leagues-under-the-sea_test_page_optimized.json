@@ -10,7 +10,7 @@
         "characters": [
           "Aronnax"
         ],
-        "bubble_position": "top-left"
+        "bubble_position": "top-right"
       },
       {
         "panel_id": 2,
@@ -19,7 +19,7 @@
         "characters": [
           "Ned Land"
         ],
-        "bubble_position": "top-left"
+        "bubble_position": "bottom-right"
       },
       {
         "panel_id": 3,
@@ -28,7 +28,7 @@
         "characters": [
           "Conseil"
         ],
-        "bubble_position": "top-left"
+        "bubble_position": "top-right"
       },
       {
         "panel_id": 4,
