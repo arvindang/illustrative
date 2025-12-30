@@ -23,6 +23,8 @@ def init_session_state():
         st.session_state.step = 1
     if 'project_config' not in st.session_state:
         st.session_state.project_config = {}
+    if 'chapter_map' not in st.session_state:
+        st.session_state.chapter_map = None
     if 'beat_sheet_data' not in st.session_state:
         st.session_state.beat_sheet_data = None
     if 'script_data' not in st.session_state:
@@ -91,14 +93,19 @@ def main():
                 }
                 
                 # Run Architect Phase
+                scripter = ScriptingAgent(str(input_path))
+                
+                with st.spinner("🗺️ Mapping Chapters (Gemini 1.5 Pro)..."):
+                    full_text = scripter.load_content(test_mode=False)
+                    chapter_map = asyncio.run(scripter.generate_chapter_map(full_text))
+                    st.session_state.chapter_map = chapter_map
+
                 with st.spinner("🏗️ Architecting Story Arc (Gemini 2.0 Flash)..."):
-                    scripter = ScriptingAgent(str(input_path))
-                    # Load text manually to pass to Architect method
-                    source_text = scripter.load_content(test_mode=test_mode)
                     target_pages = 1 if test_mode else 10
                     
                     beat_sheet = asyncio.run(scripter.generate_beat_sheet(
-                        source_text, 
+                        full_text,
+                        chapter_map=st.session_state.chapter_map, 
                         style=style, 
                         target_page_count=target_pages
                     ))
@@ -129,7 +136,8 @@ def main():
             if st.button("Approve & Write Full Script ➡️"):
                 config = st.session_state.project_config
                 scripter = ScriptingAgent(config['input_path'])
-                source_text = scripter.load_content(test_mode=config['test_mode'])
+                full_text = scripter.load_content(test_mode=False)
+                chapter_map = st.session_state.chapter_map
                 
                 with st.spinner("✍️ Writing Scene Scripts (Gemini 2.0 Flash)..."):
                     full_script = []
@@ -138,8 +146,12 @@ def main():
                     total_beats = len(beat_sheet)
                     
                     for i, beat in enumerate(beat_sheet):
+                        # SLIDING CONTEXT
+                        relevant_chapters = beat.get('relevant_chapters', [])
+                        context_text = scripter.get_chapter_text(full_text, chapter_map, relevant_chapters)
+                        
                         page_script = asyncio.run(scripter.write_page_script(
-                            beat, source_text, config['style'], config['tone']
+                            beat, context_text, config['style'], config['tone']
                         ))
                         full_script.append(page_script)
                         progress_bar.progress((i + 1) / total_beats)
