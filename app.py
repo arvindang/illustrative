@@ -12,6 +12,7 @@ from character_architect import CharacterArchitect
 from illustrator_agent import IllustratorAgent
 from compositor_agent import CompositorAgent
 from exporter_agent import ExporterAgent
+from continuity_validator import ContinuityValidator
 
 load_dotenv()
 
@@ -254,9 +255,76 @@ def main():
                     st.session_state.step = 2
                     st.rerun()
             with col2:
-                if st.button("Approve Characters & Start Production ➡️"):
-                    st.session_state.step = 4
+                if st.button("Approve Characters & Validate Continuity ➡️"):
+                    st.session_state.step = 3.5
                     st.rerun()
+
+    # STEP 3.5: CONTINUITY VALIDATION
+    elif st.session_state.step == 3.5:
+        st.header("Step 3.5: Continuity Validation")
+
+        config = st.session_state.project_config
+        input_stem = Path(config['input_path']).stem
+        suffix = "_test_page.json" if config['test_mode'] else "_full_script.json"
+        script_path = Path("assets/output") / f"{input_stem}{suffix}"
+        character_dir = Path("assets/output/characters")
+
+        st.info("Validating script for continuity issues across panels...")
+
+        if st.button("🔍 Run Continuity Validation"):
+            with st.spinner("Analyzing script for continuity issues..."):
+                validator = ContinuityValidator(
+                    script_path=str(script_path),
+                    character_metadata_dir=str(character_dir)
+                )
+
+                result = validator.validate_script()
+
+                # Display results
+                st.subheader("Validation Results")
+
+                if not result['errors'] and not result['warnings']:
+                    st.success("✅ No continuity issues detected!")
+                else:
+                    # Show errors
+                    if result['errors']:
+                        st.error(f"🚨 Found {len(result['errors'])} errors:")
+                        for error in result['errors']:
+                            with st.expander(f"Page {error['page']}, Panel {error['panel']} - {error['type']}", expanded=False):
+                                st.write(f"**Character:** {error.get('character', 'N/A')}")
+                                st.write(f"**Message:** {error['message']}")
+
+                    # Show warnings
+                    if result['warnings']:
+                        st.warning(f"⚠️ Found {len(result['warnings'])} warnings:")
+                        for warning in result['warnings']:
+                            with st.expander(f"Page {warning['page']}, Panel {warning['panel']} - {warning['type']}", expanded=False):
+                                st.write(f"**Character:** {warning.get('character', 'N/A')}")
+                                st.write(f"**Message:** {warning['message']}")
+
+                # Show report
+                st.subheader("Full Report")
+                st.text(validator.get_validation_report())
+
+                # Download option
+                report_json = json.dumps(result, indent=2)
+                st.download_button(
+                    "Download Validation Report (JSON)",
+                    report_json,
+                    "continuity_validation.json",
+                    "application/json"
+                )
+
+        st.divider()
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("⬅️ Back to Characters"):
+                st.session_state.step = 3
+                st.rerun()
+        with col2:
+            if st.button("Proceed to Production ➡️"):
+                st.session_state.step = 4
+                st.rerun()
 
     # STEP 4: ILLUSTRATION & COMPOSITION
     elif st.session_state.step == 4:

@@ -17,46 +17,128 @@ class CharacterArchitect:
         self.script_path = Path(script_path)
         self.output_dir = Path("assets/output/characters")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize Manifest
         manifest_path = self.output_dir.parent / "production_manifest.json"
         self.manifest = ProductionManifest(manifest_path)
-        
+
+        # Character name registry for deduplication
+        self.character_registry = {}
+
+    def normalize_character_name(self, name: str):
+        """
+        Normalizes character names to handle variants and duplicates.
+        Returns canonical name and folder-safe name.
+
+        Examples:
+        - "Captain Nemo" and "Nemo" → "Captain Nemo"
+        - "Professor Aronnax", "Pierre Aronnax", "Aronnax" → "Professor Aronnax"
+        """
+        if not name or name.lower() in ["none", "null", ""]:
+            return None, None
+
+        # Common titles to detect
+        titles = ["captain", "professor", "doctor", "dr", "mr", "mrs", "miss", "sir", "lord", "lady"]
+
+        # Split name into parts
+        parts = name.strip().split()
+
+        # Extract base name (last significant word)
+        base_name = parts[-1].lower() if parts else ""
+
+        # Check if this base name already has a canonical form
+        for canonical, variants in self.character_registry.items():
+            canonical_base = canonical.split()[-1].lower()
+            if base_name == canonical_base:
+                # Add this variant to the registry
+                self.character_registry[canonical].add(name)
+                folder_name = canonical.lower().replace(" ", "_")
+                return canonical, folder_name
+
+        # New character - determine canonical name
+        # Prefer names with titles
+        has_title = any(part.lower() in titles for part in parts[:-1])
+        canonical = name if has_title or len(parts) > 1 else name
+
+        # Initialize registry entry
+        self.character_registry[canonical] = {name}
+        folder_name = canonical.lower().replace(" ", "_")
+
+        return canonical, folder_name
+
     def get_main_characters(self):
-        """Extracts unique characters from our generated JSON script."""
+        """Extracts unique characters from our generated JSON script with deduplication."""
         with open(self.script_path, "r") as f:
             data = json.load(f)
             all_chars = []
             for page in data:
                 for panel in page['panels']:
                     all_chars.extend(panel['characters'])
-            return list(set(all_chars))
+
+            # Normalize and deduplicate
+            canonical_chars = []
+            for char_name in all_chars:
+                canonical, _ = self.normalize_character_name(char_name)
+                if canonical and canonical not in canonical_chars:
+                    canonical_chars.append(canonical)
+
+            return canonical_chars
 
     @retry_with_backoff()
     async def design_character(self, char_name: str, style: str):
-        if self.manifest.is_character_designed(char_name):
-            print(f"⏭️  Skipping {char_name} (Already designed)")
+        # Normalize character name to get canonical name and folder
+        canonical_name, folder_name = self.normalize_character_name(char_name)
+        if not canonical_name:
+            print(f"⚠️  Skipping invalid character name: {char_name}")
+            return None
+
+        if self.manifest.is_character_designed(canonical_name):
+            print(f"⏭️  Skipping {canonical_name} (Already designed)")
             # Load and return existing metadata
-            char_folder = self.output_dir / char_name.lower().replace(" ", "_")
+            char_folder = self.output_dir / folder_name
             with open(char_folder / "metadata.json", "r") as f:
                 return json.load(f)
 
         async with char_limiter:
-            print(f"🎨 Designing visual profile for: {char_name}...")
-            
-            # Step 1: Generate a detailed physical description
-            desc_prompt = f"Provide a detailed physical description for the character '{char_name}' in a '{style}' graphic novel. Focus on facial features, distinctive clothing, and color palette. Output as a single paragraph."
-            
-            desc_resp = await client.aio.models.generate_content(
+            print(f"🎨 Designing visual profile for: {canonical_name}...")
+
+            # Step 1: Generate detailed character attributes and description
+            attr_prompt = f"""
+            Analyze the character '{canonical_name}' for a '{style}' graphic novel and provide:
+
+            1. A detailed physical description (facial features, clothing, color palette)
+            2. Age range (e.g., "mid-30s", "elderly", "young adult")
+            3. Occupation or role (e.g., "Sea Captain", "Professor", "Harpooner")
+            4. Distinctive items they carry or wear (e.g., "brass telescope", "harpoon", "leather journal")
+
+            Be specific and visual for use in AI image generation.
+            """
+
+            attr_resp = await client.aio.models.generate_content(
                 model="gemini-3-flash-preview",
-                contents=desc_prompt
+                contents=attr_prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "OBJECT",
+                        "properties": {
+                            "description": {"type": "STRING"},
+                            "age_range": {"type": "STRING"},
+                            "occupation": {"type": "STRING"},
+                            "distinctive_items": {"type": "ARRAY", "items": {"type": "STRING"}}
+                        },
+                        "required": ["description", "age_range", "occupation", "distinctive_items"]
+                    }
+                )
             )
-            description = desc_resp.text
+
+            char_attributes = attr_resp.parsed
+            description = char_attributes['description']
             
             # Step 2: Generate the Reference Images (Character Sheet)
-            print(f"📸 Generating reference images for {char_name}...")
-            
-            img_prompt = f"Character sheet for {char_name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
+            print(f"📸 Generating reference images for {canonical_name}...")
+
+            img_prompt = f"Character sheet for {canonical_name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
             
             response = await client.aio.models.generate_content(
                 model="gemini-3-pro-image-preview",
@@ -68,9 +150,9 @@ class CharacterArchitect:
             )
 
             # Step 3: Save the assets
-            char_folder = self.output_dir / char_name.lower().replace(" ", "_")
+            char_folder = self.output_dir / folder_name
             char_folder.mkdir(exist_ok=True)
-            
+
             paths = []
             for i, part in enumerate(response.parts):
                 if part.inline_data:
@@ -78,19 +160,21 @@ class CharacterArchitect:
                     path = char_folder / f"ref_{i}.png"
                     img.save(path)
                     paths.append(str(path))
-            
+
             # Save the metadata for the Illustrator to use later
             metadata = {
-                "name": char_name,
+                "name": canonical_name,
                 "description": description,
-                "visual_style_string": description, # checklist item #3: visual constants
+                "age_range": char_attributes.get('age_range', 'unknown'),
+                "occupation": char_attributes.get('occupation', 'unknown'),
+                "distinctive_items": char_attributes.get('distinctive_items', []),
                 "reference_images": paths
             }
             with open(char_folder / "metadata.json", "w") as f:
                 json.dump(metadata, f, indent=2)
 
-            self.manifest.mark_character_designed(char_name)
-            print(f"✅ {char_name} designed! Assets saved in: {char_folder}")
+            self.manifest.mark_character_designed(canonical_name)
+            print(f"✅ {canonical_name} designed! Assets saved in: {char_folder}")
             return metadata
 
     async def design_all_characters(self, style: str):
