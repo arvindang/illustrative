@@ -48,7 +48,7 @@ class CharacterArchitect:
             desc_prompt = f"Provide a detailed physical description for the character '{char_name}' in a '{style}' graphic novel. Focus on facial features, distinctive clothing, and color palette. Output as a single paragraph."
             
             desc_resp = await client.aio.models.generate_content(
-                model="gemini-3.0-flash",
+                model="gemini-3-flash-preview",
                 contents=desc_prompt
             )
             description = desc_resp.text
@@ -59,7 +59,7 @@ class CharacterArchitect:
             img_prompt = f"Character sheet for {char_name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
             
             response = await client.aio.models.generate_content(
-                model="gemini-3.0-pro-image",
+                model="gemini-3-pro-image-preview",
                 contents=img_prompt,
                 config=types.GenerateContentConfig(
                     response_modalities=["IMAGE"],
