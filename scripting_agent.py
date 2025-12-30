@@ -13,11 +13,25 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 # Using a semaphore to throttle the scribe phase
 scribe_limiter = RateLimiter(rpm_limit=5)
 
+# Model configuration for different tasks
+# Note: Using gemini-3-flash-preview as it's currently available
+# TODO: Update to gemini-2.0-flash-exp or gemini-2.0-flash when stable API is available
+MODEL_CONFIG = {
+    "global_context": "gemini-2.5-pro",      # Structured output, straightforward
+    "chapter_map": "gemini-3-flash-preview",         # Structured output
+    "beat_sheet": "gemini-2.5-pro",          # Story architecture
+    "page_script": "gemini-3-flash-preview",         # High volume, structured
+}
+
 class ScriptingAgent:
     def __init__(self, book_path: str):
         self.book_path = Path(book_path)
         self.output_dir = Path("assets/output")
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_model_for_task(self, task_type: str) -> str:
+        """Select appropriate model based on task requirements."""
+        return MODEL_CONFIG.get(task_type, "gemini-2.0-flash")
 
     def load_content(self, test_mode=True):
         """
@@ -62,7 +76,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-3-flash-preview", 
+            model=self.get_model_for_task("global_context"),
             contents=[prompt, full_text[:30000]], # First 30k chars usually enough for setting
         )
         
@@ -89,8 +103,17 @@ class ScriptingAgent:
         For each segment, provide:
         1. 'chapter_number': Integer.
         2. 'title': Short title.
-        3. 'summary': 2-3 sentence summary of key events.
-        4. 'main_characters': List of characters appearing.
+        3. 'key_beats': Array of distinct narrative events/actions in this chapter. BE THOROUGH.
+           IMPORTANT: key_beats should capture EVERY distinct action, event, or scene transition.
+           Each beat should be one sentence describing a specific moment or event.
+           Example: Instead of "They explore the city" (1 beat), output:
+             - "Crew approaches ancient ruins"
+             - "Entering the city gates"
+             - "Discovering the temple"
+             - "Finding treasure chamber"
+             - "Ancient traps triggered"
+             - "Escape from collapsing structure"
+        4. 'main_characters': List of characters appearing in this chapter.
         5. 'start_phrase': The first 10 words of the chapter (to help locating it).
         6. 'end_phrase': The last 10 words of the chapter.
 
@@ -98,7 +121,7 @@ class ScriptingAgent:
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-3-flash-preview", # Use 3.0 Flash for high-context analysis
+            model=self.get_model_for_task("chapter_map"),
             contents=[prompt, full_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -109,12 +132,12 @@ class ScriptingAgent:
                         "properties": {
                             "chapter_number": {"type": "INTEGER"},
                             "title": {"type": "STRING"},
-                            "summary": {"type": "STRING"},
+                            "key_beats": {"type": "ARRAY", "items": {"type": "STRING"}},
                             "main_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
                             "start_phrase": {"type": "STRING"},
                             "end_phrase": {"type": "STRING"}
                         },
-                        "required": ["chapter_number", "title", "summary"]
+                        "required": ["chapter_number", "title", "key_beats"]
                     }
                 }
             )
@@ -158,6 +181,45 @@ class ScriptingAgent:
                 
         return "\n\n--- NEXT CHAPTER ---\n\n".join(context_parts) if context_parts else full_text[:20000]
 
+    def calculate_beat_density(self, chapter_map: list, test_mode: bool = False) -> dict:
+        """
+        Calculate page allocation guidance based on narrative beat density.
+        Integrates with existing word-count-based page calculation system.
+
+        Returns:
+            Dict with total_beats, pages_per_beat ratio, target_pages, and per-chapter guidance
+        """
+        total_beats = sum(len(ch.get('key_beats', [])) for ch in chapter_map)
+
+        # Use existing dynamic page count system
+        from utils import calculate_page_count
+        word_count = len(self.load_content(test_mode=False).split())
+        page_calc = calculate_page_count(word_count, test_mode=test_mode)
+        target_pages = page_calc['recommended']
+
+        # Calculate pages per beat ratio
+        pages_per_beat = target_pages / total_beats if total_beats > 0 else 1.0
+
+        # Generate per-chapter guidance
+        chapter_guidance = []
+        for ch in chapter_map:
+            beat_count = len(ch.get('key_beats', []))
+            suggested_pages = max(1, int(beat_count * pages_per_beat))
+            chapter_guidance.append({
+                'chapter_number': ch.get('chapter_number', 0),
+                'title': ch.get('title', 'Untitled'),
+                'beat_count': beat_count,
+                'suggested_pages': suggested_pages
+            })
+
+        return {
+            'total_beats': total_beats,
+            'target_pages': target_pages,
+            'pages_per_beat': pages_per_beat,
+            'chapter_guidance': chapter_guidance,
+            'word_count': word_count
+        }
+
     @retry_with_backoff()
     async def generate_beat_sheet(self, source_text: str, chapter_map: list, style: str, target_page_count: int = 30):
         """
@@ -174,20 +236,42 @@ class ScriptingAgent:
                     return existing_beat_sheet
 
         print(f"🏗️  Architecting story structure (Target: {target_page_count} pages)...")
-        
+
+        # Calculate beat density for intelligent page allocation
+        beat_density = self.calculate_beat_density(chapter_map, test_mode=(target_page_count <= 10))
+
         chapter_summary = json.dumps(chapter_map, indent=2)
-        
+        chapter_guidance_summary = json.dumps(beat_density['chapter_guidance'], indent=2)
+
         prompt = f"""
         Act as a Master Editor adapting a novel into a {target_page_count}-page Graphic Novel.
         Your goal is ADAPTATION, not translation. You must condense the story while preserving the narrative arc, emotional beats, and key action.
 
         STYLE: {style}
-        
-        CHAPTER MAP:
+
+        CHAPTER NARRATIVE SKELETON:
         {chapter_summary}
+
+        BEAT DENSITY ANALYSIS:
+        - Total narrative beats across all chapters: {beat_density['total_beats']}
+        - Target page count (based on {beat_density['word_count']} words): {beat_density['target_pages']}
+        - Ratio: {beat_density['pages_per_beat']:.3f} pages per beat
+
+        CHAPTER PAGE ALLOCATION GUIDANCE:
+        {chapter_guidance_summary}
 
         TASK:
         Create a numbered Beat Sheet for exactly {target_page_count} pages.
+
+        INSTRUCTIONS FOR PAGE ALLOCATION:
+        - Use the key_beats arrays to understand narrative density of each chapter
+        - Follow the suggested_pages guidance above as a starting point
+        - You may adjust ±20% based on:
+          1. Narrative importance (climax chapters may deserve more pages)
+          2. Visual complexity (action scenes vs dialogue)
+          3. Story pacing (slow buildup vs fast resolution)
+        - Allocate exactly {target_page_count} pages total
+
         For each page, provide:
         1. 'page_number': The integer page number (MUST be sequential starting from 1).
         2. 'narrative_goal': What plot point happens on this page?
@@ -196,12 +280,12 @@ class ScriptingAgent:
         5. 'relevant_chapters': A list of chapter numbers from the map that this page covers.
 
         Ensure the story has a beginning, middle, and end within these {target_page_count} pages.
-        
+
         OUTPUT FORMAT: JSON List of Objects.
         """
         
         response = await client.aio.models.generate_content(
-            model="gemini-3-flash-preview",
+            model=self.get_model_for_task("beat_sheet"),
             contents=[prompt, source_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -273,7 +357,7 @@ class ScriptingAgent:
             Reference the Source Text provided to maintain character voice, but feel free to abridge dialogue significantly.
             """
 
-            models_to_try = ["gemini-3-flash-preview", "gemini-2.0-flash"]
+            models_to_try = [self.get_model_for_task("page_script"), "gemini-2.0-flash"]
             last_error = None
 
             for model_name in models_to_try:
