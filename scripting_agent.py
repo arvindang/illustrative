@@ -257,10 +257,13 @@ class ScriptingAgent:
             - Break this specific scene into 1-6 panels.
             - Ensure a logical visual flow (Z-pattern).
             - VISUAL DESCRIPTION: Must be highly descriptive for an AI image generator (mention lighting, angles, colors).
-            - DIALOGUE: Keep it punchy. Use standard comic conventions. 
+            - DIALOGUE: Keep it punchy. Use standard comic conventions.
               CRITICAL: Do NOT include character names like "Narrator:" or "Nemo:" in the dialogue string. ONLY provide the text to be spoken or narrated.
             - BUBBLE POSITION: Ensure text doesn't cover faces.
-            - ADVICE: Provide a brief "advice" string for each panel regarding VISUAL CONTINUITY (e.g., "Nemo should still be holding the sextant from the previous panel/page"), historical accuracy (e.g., "The year is 1866, ensure no modern technology is visible"), character gear, or specific logic.
+            - ADVICE: Provide structured guidance for each panel with three categories:
+              * continuity_notes: What props, clothing, or positions carry over from previous panels (e.g., "Nemo holding sextant from panel 2")
+              * historical_constraints: Era-specific requirements and technology limitations (e.g., "1866, no modern tech visible")
+              * character_gear: What characters should be holding, wearing, or have with them (e.g., "Captain's coat, brass telescope")
             
             Reference the Source Text provided to maintain character voice, but feel free to abridge dialogue significantly.
             """
@@ -288,7 +291,15 @@ class ScriptingAgent:
                                                 "panel_id": {"type": "INTEGER"},
                                                 "visual_description": {"type": "STRING"},
                                                 "dialogue": {"type": "STRING"},
-                                                "advice": {"type": "STRING"},
+                                                "advice": {
+                                                    "type": "OBJECT",
+                                                    "properties": {
+                                                        "continuity_notes": {"type": "STRING"},
+                                                        "historical_constraints": {"type": "STRING"},
+                                                        "character_gear": {"type": "STRING"}
+                                                    },
+                                                    "required": ["continuity_notes", "historical_constraints", "character_gear"]
+                                                },
                                                 "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
                                                 "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
                                             },
@@ -327,8 +338,8 @@ class ScriptingAgent:
         chapter_map = await self.generate_chapter_map(full_text)
         
         # 2. THE ARCHITECT PHASE
-        # If test mode, we just do 1 page.
-        target_pages = 1 if test_mode else 100
+        # If test mode, we do 3 pages.
+        target_pages = 3 if test_mode else 100
         beat_sheet = await self.generate_beat_sheet(full_text, chapter_map, style, target_pages)
         
         # 3. THE SCRIBE PHASE

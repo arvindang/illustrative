@@ -103,17 +103,29 @@ class IllustratorAgent:
                 composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the BOTTOM-RIGHT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
             
             # 1. Construct the master prompt
+            # Parse structured advice if available, fall back to string for backward compatibility
+            advice_data = panel_data.get('advice', {})
+            if isinstance(advice_data, dict):
+                advice_str = f"""
+                CONTINUITY: {advice_data.get('continuity_notes', 'N/A')}
+                HISTORICAL CONSTRAINTS: {advice_data.get('historical_constraints', 'N/A')}
+                CHARACTER GEAR: {advice_data.get('character_gear', 'N/A')}
+                """
+            else:
+                # Backward compatibility with old string-based advice
+                advice_str = str(advice_data)
+
             master_prompt = f"""
             STYLE DIRECTIVE: {self.style_prompt}
-            
+
             PANEL VISUALS: {panel_data['visual_description']}
-            SPECIFIC ADVICE: {panel_data.get('advice', '')}
+
+            SPECIFIC GUIDANCE:
+            {advice_str}
             {composition_instruction}
-            
-            CONTEXT (Dialogue occurring): "{panel_data['dialogue']}"
-            
+
             REQUIREMENTS: High quality comic panel art. Maintain consistency with provided character references.
-            CRITICAL NEGATIVE CONSTRAINT: Do NOT render any text, words, speech bubbles, captions, or EMPTY BOUNDING BOXES/FRAMES in the image. The image must be pure text-free art without any placeholders, graphical UI elements, or white boxes.
+            CRITICAL NEGATIVE CONSTRAINT: Do NOT render any text, words, speech bubbles, captions, or EMPTY BOUNDING BOXES/FRAMES in the image. The image must be pure text-free art without any placeholders, graphical UI elements, or white boxes. Text will be added separately in post-production.
             """
             
             # 2. Gather necessary character references for this specific panel
@@ -127,9 +139,9 @@ class IllustratorAgent:
                     # Add reference images
                     input_contents.extend(self.character_bank[char_name])
                     chars_included.append(char_name)
-                    
+
                     # Add visual constant description if available
-                    desc = self.character_bank_metadata.get(char_name, {}).get('visual_style_string', "")
+                    desc = self.character_bank_metadata.get(char_name, {}).get('description', "")
                     if desc:
                         char_descriptions.append(f"CHARACTER {char_name}: {desc}")
             
