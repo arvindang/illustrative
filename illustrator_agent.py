@@ -78,32 +78,31 @@ class IllustratorAgent:
         async with image_limiter:
             print(f"🎨 Generating Page {page_num}, Panel {panel_id}...")
 
-            # Determine compositional negative space based on bubble position
-            bubble_pos = panel_data.get('bubble_position', 'top-left')
-            composition_instruction = ""
-            if bubble_pos == "top-left":
-                composition_instruction = "COMPOSITION RULE: Leave empty negative space in the TOP-LEFT corner for a speech bubble. Frame main action away from this corner."
-            elif bubble_pos == "top-right":
-                composition_instruction = "COMPOSITION RULE: Leave empty negative space in the TOP-RIGHT corner for a speech bubble. Frame main action away from this corner."
-            elif bubble_pos == "bottom-left":
-                composition_instruction = "COMPOSITION RULE: Leave empty negative space in the BOTTOM-LEFT corner for a speech bubble. Frame main action away from this corner."
-            elif bubble_pos == "bottom-right":
-                composition_instruction = "COMPOSITION RULE: Leave empty negative space in the BOTTOM-RIGHT corner for a speech bubble. Frame main action away from this corner."
-
-            # 1. Construct the master prompt
-            master_prompt = f"""
-            STYLE DIRECTIVE: {self.style_prompt}
+                    # Determine compositional negative space based on bubble position
+                    bubble_pos = panel_data.get('bubble_position', 'top-left')
+                    composition_instruction = ""
+                    if bubble_pos == "top-left":
+                        composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the TOP-LEFT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
+                    elif bubble_pos == "top-right":
+                        composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the TOP-RIGHT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
+                    elif bubble_pos == "bottom-left":
+                        composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the BOTTOM-LEFT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
+                    elif bubble_pos == "bottom-right":
+                        composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the BOTTOM-RIGHT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
             
-            PANEL VISUALS: {panel_data['visual_description']}
-            {composition_instruction}
-            
-            CONTEXT (Dialogue occurring): "{panel_data['dialogue']}"
-            
-            REQUIREMENTS: High quality comic panel art. Maintain consistency with provided character references.
-            CRITICAL NEGATIVE CONSTRAINT: Do NOT render any text, words, speech bubbles, or captions in the image. The image must be text-free art only.
-            """
-
-            # 2. Gather necessary character references for this specific panel
+                    # 1. Construct the master prompt
+                    master_prompt = f"""
+                    STYLE DIRECTIVE: {self.style_prompt}
+                    
+                    PANEL VISUALS: {panel_data['visual_description']}
+                    {composition_instruction}
+                    
+                    CONTEXT (Dialogue occurring): "{panel_data['dialogue']}"
+                    
+                    REQUIREMENTS: High quality comic panel art. Maintain consistency with provided character references.
+                    CRITICAL NEGATIVE CONSTRAINT: Do NOT render any text, words, speech bubbles, captions, or EMPTY BOUNDING BOXES/FRAMES in the image. The image must be pure text-free art without any placeholders, graphical UI elements, or white boxes.
+                    """
+                        # 2. Gather necessary character references for this specific panel
             input_contents = [master_prompt]
             present_chars = panel_data.get('characters', [])
             
