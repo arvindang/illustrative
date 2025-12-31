@@ -101,7 +101,7 @@ class IllustratorAgent:
         )
 
     @retry_with_backoff(max_retries=3) # Image generation can be more brittle
-    async def generate_panel(self, page_num: int, panel_data: dict):
+    async def generate_panel(self, page_num: int, panel_data: dict, prev_panel_context: str = None, next_panel_context: str = None):
         panel_id = panel_data['panel_id']
         
         # Check if already complete
@@ -137,10 +137,19 @@ class IllustratorAgent:
                 # Backward compatibility with old string-based advice
                 advice_str = str(advice_data)
 
+            # Build narrative flow context
+            narrative_flow = ""
+            if prev_panel_context:
+                narrative_flow += f"\nPREVIOUS PANEL ACTION (Sequence Context): {prev_panel_context}"
+            if next_panel_context:
+                narrative_flow += f"\nNEXT PANEL ACTION (Sequence Context): {next_panel_context}"
+            
             master_prompt = f"""
             STYLE DIRECTIVE: {self.style_prompt}
 
             PANEL VISUALS: {panel_data['visual_description']}
+
+            NARRATIVE FLOW:{narrative_flow}
 
             SPECIFIC GUIDANCE:
             {advice_str}
@@ -216,13 +225,49 @@ class IllustratorAgent:
         with open(self.script_path, "r") as f:
             script_data = json.load(f)
 
-        # 3. Iterate through pages and panels
-        print(f"🎨 Generating panels for {len(script_data)} pages in parallel...")
-        tasks = []
+        # 2. Flatten all panels to a single list with context
+        all_panels = []
         for page in script_data:
             page_num = page['page_number']
             for panel in page['panels']:
-                tasks.append(self.generate_panel(page_num, panel))
+                all_panels.append({
+                    'page_num': page_num,
+                    'panel_data': panel
+                })
+        
+        # 3. Iterate through panels and generate tasks with context
+        print(f"🎨 Generating {len(all_panels)} panels (from {len(script_data)} pages) in parallel...")
+        tasks = []
+        
+        for i, item in enumerate(all_panels):
+            page_num = item['page_num']
+            panel = item['panel_data']
+            
+            # Determine Previous Context
+            prev_context = None
+            if i > 0:
+                prev_item = all_panels[i-1]
+                prev_desc = prev_item['panel_data'].get('visual_description', '')
+                prev_page = prev_item['page_num']
+                # Include page boundary info if applicable
+                context_prefix = ""
+                if prev_page != page_num:
+                    context_prefix = "[PREVIOUS PAGE FINAL PANEL] "
+                prev_context = f"{context_prefix}{prev_desc}"
+
+            # Determine Next Context
+            next_context = None
+            if i < len(all_panels) - 1:
+                next_item = all_panels[i+1]
+                next_desc = next_item['panel_data'].get('visual_description', '')
+                next_page = next_item['page_num']
+                # Include page boundary info if applicable
+                context_prefix = ""
+                if next_page != page_num:
+                    context_prefix = "[NEXT PAGE FIRST PANEL] "
+                next_context = f"{context_prefix}{next_desc}"
+
+            tasks.append(self.generate_panel(page_num, panel, prev_context, next_context))
         
         await asyncio.gather(*tasks)
 
