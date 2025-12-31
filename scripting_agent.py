@@ -18,9 +18,8 @@ scribe_limiter = RateLimiter(rpm_limit=5)
 # TODO: Update to gemini-2.0-flash-exp or gemini-2.0-flash when stable API is available
 MODEL_CONFIG = {
     "global_context": "gemini-2.5-pro",      # Structured output, straightforward
-    "chapter_map": "gemini-3-flash-preview",         # Structured output
-    "beat_sheet": "gemini-2.5-pro",          # Story architecture
-    "page_script": "gemini-3-flash-preview",         # High volume, structured
+    "chapter_map": "gemini-3-flash-preview", # Structural indexing (lightweight)
+    "page_script": "gemini-2.5-pro",         # High-quality script generation with full text access
 }
 
 class ScriptingAgent:
@@ -145,6 +144,10 @@ class ScriptingAgent:
     def get_chapter_text(self, full_text: str, chapter_map: list, chapter_numbers: list):
         """
         Slices the full text to include only the requested chapters.
+
+        LEGACY METHOD: Kept for backward compatibility with old beat_sheet workflow.
+        New pipeline uses get_chapter_text_by_phrase() instead.
+        May still be used by production_run.py or other external scripts.
         """
         if not chapter_numbers:
             return full_text[:20000] # Fallback
@@ -173,44 +176,6 @@ class ScriptingAgent:
                 
         return "\n\n--- NEXT CHAPTER ---\n\n".join(context_parts) if context_parts else full_text[:20000]
 
-    def calculate_beat_density(self, chapter_map: list, test_mode: bool = False) -> dict:
-        """
-        Calculate page allocation guidance based on narrative beat density.
-        Integrates with existing word-count-based page calculation system.
-
-        Returns:
-            Dict with total_beats, pages_per_beat ratio, target_pages, and per-chapter guidance
-        """
-        total_beats = sum(len(ch.get('key_beats', [])) for ch in chapter_map)
-
-        # Use existing dynamic page count system
-        from utils import calculate_page_count
-        word_count = len(self.load_content(test_mode=False).split())
-        page_calc = calculate_page_count(word_count, test_mode=test_mode)
-        target_pages = page_calc['recommended']
-
-        # Calculate pages per beat ratio
-        pages_per_beat = target_pages / total_beats if total_beats > 0 else 1.0
-
-        # Generate per-chapter guidance
-        chapter_guidance = []
-        for ch in chapter_map:
-            beat_count = len(ch.get('key_beats', []))
-            suggested_pages = max(1, int(beat_count * pages_per_beat))
-            chapter_guidance.append({
-                'chapter_number': ch.get('chapter_number', 0),
-                'title': ch.get('title', 'Untitled'),
-                'beat_count': beat_count,
-                'suggested_pages': suggested_pages
-            })
-
-        return {
-            'total_beats': total_beats,
-            'target_pages': target_pages,
-            'pages_per_beat': pages_per_beat,
-            'chapter_guidance': chapter_guidance,
-            'word_count': word_count
-        }
 
     def get_chapter_text_by_phrase(self, full_text: str, start_phrase: str, end_phrase: str) -> str:
         """
@@ -272,99 +237,6 @@ class ScriptingAgent:
         print(f"✅ Allocated {len(page_allocations)} pages across {len(chapter_index)} chapters")
         return page_allocations
 
-    @retry_with_backoff()
-    async def generate_beat_sheet(self, source_text: str, chapter_map: list, style: str, target_page_count: int = 30):
-        """
-        THE ARCHITECT: break the story down into a page-by-page outline.
-        Uses the Chapter Map to ensure global coverage.
-        """
-        beat_sheet_path = self.output_dir / f"{self.book_path.stem}_beat_sheet.json"
-        if beat_sheet_path.exists():
-            # Check if existing beat sheet matches the target page count
-            with open(beat_sheet_path, "r") as f:
-                existing_beat_sheet = json.load(f)
-                if len(existing_beat_sheet) == target_page_count:
-                    print(f"⏭️  Skipping Beat Sheet Generation (Already exists with {target_page_count} pages)")
-                    return existing_beat_sheet
-
-        print(f"🏗️  Architecting story structure (Target: {target_page_count} pages)...")
-
-        # Calculate beat density for intelligent page allocation
-        beat_density = self.calculate_beat_density(chapter_map, test_mode=(target_page_count <= 10))
-
-        chapter_summary = json.dumps(chapter_map, indent=2)
-        chapter_guidance_summary = json.dumps(beat_density['chapter_guidance'], indent=2)
-
-        prompt = f"""
-        Act as a Master Editor adapting a novel into a {target_page_count}-page Graphic Novel.
-        Your goal is ADAPTATION, not translation. You must condense the story while preserving the narrative arc, emotional beats, and key action.
-
-        STYLE: {style}
-
-        CHAPTER NARRATIVE SKELETON:
-        {chapter_summary}
-
-        BEAT DENSITY ANALYSIS:
-        - Total narrative beats across all chapters: {beat_density['total_beats']}
-        - Target page count (based on {beat_density['word_count']} words): {beat_density['target_pages']}
-        - Ratio: {beat_density['pages_per_beat']:.3f} pages per beat
-
-        CHAPTER PAGE ALLOCATION GUIDANCE:
-        {chapter_guidance_summary}
-
-        TASK:
-        Create a numbered Beat Sheet for exactly {target_page_count} pages.
-
-        INSTRUCTIONS FOR PAGE ALLOCATION:
-        - Use the key_beats arrays to understand narrative density of each chapter
-        - Follow the suggested_pages guidance above as a starting point
-        - You may adjust ±20% based on:
-          1. Narrative importance (climax chapters may deserve more pages)
-          2. Visual complexity (action scenes vs dialogue)
-          3. Story pacing (slow buildup vs fast resolution)
-        - Allocate exactly {target_page_count} pages total
-
-        For each page, provide:
-        1. 'page_number': The integer page number (MUST be sequential starting from 1).
-        2. 'narrative_goal': What plot point happens on this page?
-        3. 'key_visual': The most important visual anchor for this page.
-        4. 'atmosphere': The mood of this specific page.
-        5. 'relevant_chapters': A list of chapter numbers from the map that this page covers.
-
-        Ensure the story has a beginning, middle, and end within these {target_page_count} pages.
-
-        OUTPUT FORMAT: JSON List of Objects.
-        """
-        
-        response = await client.aio.models.generate_content(
-            model=self.get_model_for_task("beat_sheet"),
-            contents=[prompt, source_text],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema={
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "page_number": {"type": "INTEGER"},
-                            "narrative_goal": {"type": "STRING"},
-                            "key_visual": {"type": "STRING"},
-                            "atmosphere": {"type": "STRING"},
-                            "relevant_chapters": {"type": "ARRAY", "items": {"type": "INTEGER"}}
-                        },
-                        "required": ["page_number", "narrative_goal", "relevant_chapters"]
-                    }
-                }
-            )
-        )
-        
-        # Save Beat Sheet for Review
-        beat_sheet_path = self.output_dir / f"{self.book_path.stem}_beat_sheet.json"
-        with open(beat_sheet_path, "w") as f:
-            json.dump(response.parsed, f, indent=2)
-            
-        print(f"✅ Beat Sheet Saved: {beat_sheet_path}")
-        return response.parsed
 
     @retry_with_backoff()
     async def write_page_script(
@@ -507,17 +379,21 @@ OUTPUT FORMAT: JSON with panels array.
                 except Exception as e:
                     last_error = e
                     if "429" in str(e):
-                        print(f"⚠️ Model {model_name} rate limited on Page {beat['page_number']}. Trying fallback...")
+                        print(f"⚠️ Model {model_name} rate limited on Page {page_allocation['page_number']}. Trying fallback...")
                         continue
                     raise e
             
             raise last_error
 
-    async def generate_script(self, style: str, tone: str, writing_style: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
+    async def generate_script(self, style: str, tone: str, writing_style: str = "Cinematic", test_mode=True, context_constraints: str = "", target_page_override: int = None):
+        """
+        Main orchestration method: Generates complete script using simplified pipeline.
+        Note: writing_style parameter kept for backward compatibility but not actively used in new pipeline.
+        """
         # Save the result
         suffix = "_test_page.json" if test_mode else "_full_script.json"
         output_file = self.output_dir / f"{self.book_path.stem}{suffix}"
-        
+
         if output_file.exists():
             print(f"⏭️  Skipping Full Script Generation (Already exists: {output_file})")
             with open(output_file, "r") as f:
@@ -547,32 +423,37 @@ OUTPUT FORMAT: JSON with panels array.
         target_pages = page_calc['recommended']
 
         # 1. THE MAPPER PHASE
-        # We generate a chapter map to help slice the story
-        chapter_map = await self.generate_chapter_map(full_text)
+        # Generate minimal chapter index for structural boundaries
+        print("🗺️  Generating Chapter Index...")
+        chapter_index = await self.generate_chapter_map(full_text)
 
-        # 2. THE ARCHITECT PHASE
-        beat_sheet = await self.generate_beat_sheet(full_text, chapter_map, style, target_pages)
-        
+        # 2. SIMPLIFIED PAGE ALLOCATION
+        # Allocate pages based on word count distribution
+        print(f"📊 Allocating {target_pages} pages across chapters...")
+        page_allocations = self.allocate_pages_simple(chapter_index, target_pages)
+
         # 3. THE SCRIBE PHASE
-        print(f"✍️  Scripting {len(beat_sheet)} pages in parallel...")
-        
+        # Generate all pages in parallel with full text access
+        print(f"✍️  Scripting {len(page_allocations)} pages in parallel...")
+
         tasks = []
-        for beat in beat_sheet:
-            # SLIDING CONTEXT: Only provide text for relevant chapters
-            relevant_chapters = beat.get('relevant_chapters', [])
-            context_text = self.get_chapter_text(full_text, chapter_map, relevant_chapters)
-            
-            tasks.append(self.write_page_script(beat, context_text, style, tone, context_constraints))
-        
+        for page_alloc in page_allocations:
+            tasks.append(self.write_page_script(
+                page_alloc,
+                full_text,
+                chapter_index,
+                style,
+                tone,
+                context_constraints,
+                dialogue_mode='balanced'
+            ))
+
         full_script = await asyncio.gather(*tasks)
 
         # Save the result
-        suffix = "_test_page.json" if test_mode else "_full_script.json"
-        output_file = self.output_dir / f"{self.book_path.stem}{suffix}"
-        
         with open(output_file, "w") as f:
             json.dump(full_script, f, indent=2)
-        
+
         print(f"✅ Script Generation Complete! Saved to: {output_file}")
         return full_script
 
