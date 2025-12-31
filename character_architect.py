@@ -6,16 +6,17 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from utils import retry_with_backoff, RateLimiter, ProductionManifest
+from config import config
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-char_limiter = RateLimiter(rpm_limit=5)
+client = genai.Client(api_key=config.gemini_api_key)
+char_limiter = RateLimiter(rpm_limit=config.character_rpm)
 
 class CharacterArchitect:
     def __init__(self, script_path: str):
         self.script_path = Path(script_path)
-        self.output_dir = Path("assets/output/characters")
+        self.output_dir = config.characters_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize Manifest
@@ -113,7 +114,7 @@ class CharacterArchitect:
             """
 
             attr_resp = await client.aio.models.generate_content(
-                model="gemini-3-flash-preview",
+                model=config.character_model_attributes,
                 contents=attr_prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -139,7 +140,7 @@ class CharacterArchitect:
             img_prompt = f"Character sheet for {canonical_name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
             
             response = await client.aio.models.generate_content(
-                model="gemini-3-pro-image-preview",
+                model=config.character_model_image,
                 contents=img_prompt,
                 config=types.GenerateContentConfig(
                     response_modalities=["IMAGE"],

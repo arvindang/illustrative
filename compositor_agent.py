@@ -1,30 +1,51 @@
 import os
 import json
+import re
 import textwrap
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from exporter_agent import ExporterAgent
+from config import config
 
 class CompositorAgent:
     def __init__(self, script_path: str):
         self.script_path = Path(script_path)
-        self.panels_dir = Path("assets/output/pages")
-        self.output_dir = Path("assets/output/final_pages")
+        self.panels_dir = config.pages_dir
+        self.output_dir = config.final_pages_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Configuration for a standard 2x2 grid
-        self.page_width = 2400
-        self.page_height = 3200
-        self.margin = 60
-        self.gutter = 40
-        
+        self.page_width = config.page_width
+        self.page_height = config.page_height
+        self.margin = config.page_margin
+        self.gutter = config.panel_gutter
+
         # Load a font (Ensure you have a .ttf file in a 'fonts' folder)
         # Fallback to a basic system font if not found
         try:
-            self.font = ImageFont.truetype("fonts/PatrickHand-Regular.ttf", 60)
+            self.font = ImageFont.truetype(config.font_path, config.font_size)
         except:
             print("⚠️ Font not found, using default.")
             self.font = ImageFont.load_default()
+
+    def clean_dialogue(self, text: str) -> str:
+        """
+        Remove character name prefixes like 'Nemo:' or 'Narrator:' from dialogue.
+        This prevents bubbles showing "Nemo: I shall not..." instead of just "I shall not..."
+
+        Args:
+            text: Raw dialogue text that may contain character name prefixes
+
+        Returns:
+            Cleaned dialogue text without name prefixes
+        """
+        if not text:
+            return text
+
+        # Remove patterns like "Name:" or "Name (aside):" at the start of dialogue
+        # Matches: "Captain Nemo:", "Professor:", "Nemo (whispers):", etc.
+        cleaned = re.sub(r'^[A-Z][a-z\s]*(\([^)]+\))?:\s*', '', text.strip())
+        return cleaned.strip()
 
     def wrap_text(self, text, max_width):
         """Wraps text to fit within a specified width."""
@@ -36,7 +57,9 @@ class CompositorAgent:
     def draw_speech_bubble(self, draw, text, panel_rect, position_code="top-left"):
         """Draws a rounded speech bubble with wrapped text positioned dynamically."""
         panel_x, panel_y, panel_w, panel_h = panel_rect
-        wrapped_text = self.wrap_text(text, 500)
+        # Clean dialogue first (remove character name prefixes)
+        cleaned_text = self.clean_dialogue(text)
+        wrapped_text = self.wrap_text(cleaned_text, 500)
         
         # Calculate text size
         # We use (0,0) to get dimensions relative to the anchor point.

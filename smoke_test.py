@@ -17,7 +17,7 @@ async def run_smoke_test():
     # 1. Scripting (Test Mode = 1 page)
     print("\n--- STEP 1: SCRIPTING ---")
     scripter = ScriptingAgent(input_file)
-    script = await scripter.generate_script(style=style, tone=tone, writing_style="Cinematic", test_mode=True)
+    script = await scripter.generate_script(style=style, tone=tone, test_mode=True)
     
     script_path = "assets/output/20-thousand-leagues-under-the-sea_test_page.json"
     

@@ -8,16 +8,15 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from utils import retry_with_backoff, RateLimiter, ProductionManifest
+from config import config
 
 load_dotenv()
 
 # Initialize Gemini Client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-IMAGE_MODEL = "gemini-3-pro-image-preview"
-FALLBACK_IMAGE_MODEL = "gemini-2.5-flash-image"
+client = genai.Client(api_key=config.gemini_api_key)
 
 # Image generation often has tighter RPM limits (e.g. 5-10 RPM)
-image_limiter = RateLimiter(rpm_limit=5)
+image_limiter = RateLimiter(rpm_limit=config.image_rpm)
 
 class IllustratorAgent:
     def __init__(self, script_path: str, style_prompt: str):
@@ -31,41 +30,64 @@ class IllustratorAgent:
         manifest_path = self.output_base_dir.parent / "production_manifest.json"
         self.manifest = ProductionManifest(manifest_path)
         
-        # In-memory bank of loaded PIL reference images
-        self.character_bank = {} 
-        self.character_bank_metadata = {}
-        self.current_model = IMAGE_MODEL
+        # In-memory cache for lazy-loaded PIL reference images
+        self._character_cache = {}
+        self._metadata_cache = {}
+        self.current_model = config.image_model_primary
 
-    def load_character_bank(self):
+    def load_character_refs(self, char_name: str):
         """
-        Pre-loads all generated character reference images into memory as PIL objects.
-        This is crucial for passing them to the Gemini API for consistency checking.
+        Lazy-loads character reference images on-demand and caches them.
+        Only loads what's needed for the current panel, significantly reducing memory usage.
+
+        Args:
+            char_name: The character name to load references for
+
+        Returns:
+            tuple: (list of PIL Images, metadata dict) or ([], {}) if not found
         """
-        print("📂 Loading character reference assets into memory...")
+        # Check cache first
+        if char_name in self._character_cache:
+            return self._character_cache[char_name], self._metadata_cache[char_name]
+
+        # Load from disk
         if not self.char_base_dir.exists():
-            print("⚠️ Warning: No character assets found. Run character_architect.py first.")
-            return
+            print(f"⚠️ Warning: Character folder not found for {char_name}")
+            return [], {}
 
-        for char_folder in self.char_base_dir.iterdir():
-            if char_folder.is_dir():
-                metadata_path = char_folder / "metadata.json"
-                if metadata_path.exists():
-                    with open(metadata_path, "r") as f:
-                        meta = json.load(f)
-                        char_name = meta['name']
-                        self.character_bank_metadata[char_name] = meta
-                        ref_images = []
-                        # Load each reference image path listed in metadata
-                        for img_path_str in meta['reference_images']:
-                            img_path = Path(img_path_str)
-                            if img_path.exists():
-                                # Open as PIL Image
-                                ref_images.append(Image.open(img_path))
-                        
-                        if ref_images:
-                            self.character_bank[char_name] = ref_images
-                            print(f"  ✅ Loaded {len(ref_images)} references for: {char_name}")
-        print("--- Character Bank Ready ---")
+        # Normalize character name to folder format
+        from character_architect import CharacterArchitect
+        arch = CharacterArchitect("")  # Temporary instance for normalization
+        _, folder_name = arch.normalize_character_name(char_name)
+        char_folder = self.char_base_dir / folder_name
+
+        if not char_folder.exists():
+            print(f"⚠️ Warning: No assets found for {char_name}")
+            return [], {}
+
+        metadata_path = char_folder / "metadata.json"
+        if not metadata_path.exists():
+            print(f"⚠️ Warning: No metadata found for {char_name}")
+            return [], {}
+
+        # Load metadata and reference images
+        with open(metadata_path, "r") as f:
+            meta = json.load(f)
+
+        ref_images = []
+        for img_path_str in meta.get('reference_images', []):
+            img_path = Path(img_path_str)
+            if img_path.exists():
+                ref_images.append(Image.open(img_path))
+
+        # Cache for future use
+        self._character_cache[char_name] = ref_images
+        self._metadata_cache[char_name] = meta
+
+        if ref_images:
+            print(f"  📂 Lazy-loaded {len(ref_images)} refs for {char_name}")
+
+        return ref_images, meta
 
     async def _call_generate_content(self, model_name: str, input_contents: list):
         """Helper to call the API with a specific model."""
@@ -128,20 +150,22 @@ class IllustratorAgent:
             CRITICAL NEGATIVE CONSTRAINT: Do NOT render any text, words, speech bubbles, captions, or EMPTY BOUNDING BOXES/FRAMES in the image. The image must be pure text-free art without any placeholders, graphical UI elements, or white boxes. Text will be added separately in post-production.
             """
             
-            # 2. Gather necessary character references for this specific panel
+            # 2. Gather necessary character references for this specific panel (lazy loading)
             input_contents = [master_prompt]
             present_chars = panel_data.get('characters', [])
-            
+
             chars_included = []
             char_descriptions = []
             for char_name in present_chars:
-                if char_name in self.character_bank:
+                # Lazy-load character refs on-demand
+                ref_images, metadata = self.load_character_refs(char_name)
+                if ref_images:
                     # Add reference images
-                    input_contents.extend(self.character_bank[char_name])
+                    input_contents.extend(ref_images)
                     chars_included.append(char_name)
 
                     # Add visual constant description if available
-                    desc = self.character_bank_metadata.get(char_name, {}).get('description', "")
+                    desc = metadata.get('description', "")
                     if desc:
                         char_descriptions.append(f"CHARACTER {char_name}: {desc}")
             
@@ -160,9 +184,9 @@ class IllustratorAgent:
             except Exception as e:
                 # Check for 429 Resource Exhausted (specifically daily limit)
                 error_msg = str(e).lower()
-                if "429" in error_msg and self.current_model != FALLBACK_IMAGE_MODEL:
-                    print(f"⚠️ Primary model {self.current_model} exhausted quota. Falling back to {FALLBACK_IMAGE_MODEL}...")
-                    self.current_model = FALLBACK_IMAGE_MODEL
+                if "429" in error_msg and self.current_model != config.image_model_fallback:
+                    print(f"⚠️ Primary model {self.current_model} exhausted quota. Falling back to {config.image_model_fallback}...")
+                    self.current_model = config.image_model_fallback
                     response = await self._call_generate_content(self.current_model, input_contents)
                 else:
                     raise e
@@ -184,11 +208,11 @@ class IllustratorAgent:
                     break 
 
     async def run_production(self):
-        """Main loop to process the entire script."""
-        # 1. Load assets
-        self.load_character_bank()
-        
-        # 2. Load script
+        """
+        Main loop to process the entire script.
+        Character references are lazy-loaded on-demand to reduce memory usage.
+        """
+        # 1. Load script
         with open(self.script_path, "r") as f:
             script_data = json.load(f)
 

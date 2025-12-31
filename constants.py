@@ -46,39 +46,12 @@ NARRATIVE_TONES = [
     "Gothic",
 ]
 
-# Style descriptions for tooltips/documentation (optional enhancement)
-STYLE_DESCRIPTIONS = {
-    "Manga/Anime": "Japanese comic art with dynamic motion lines and expressive characters",
-    "Ligne Claire (Franco-Belgian)": "Clean line work with flat colors (Tintin/Hergé style)",
-    "Art Nouveau": "Organic flowing lines with decorative elements (Mucha style)",
-    "Traditional Indian Miniature": "Intricate Mughal/Rajasthani painting style with rich colors, ornate borders, divine iconography, and gold leaf details (ideal for Mahabharata/Ramayana)",
-    "Impressionist": "Soft brushstrokes emphasizing light and atmosphere",
-    "Surrealist": "Dreamlike compositions with unexpected juxtapositions",
-    "Expressionist": "Bold distortions expressing emotional intensity",
-    "Chiaroscuro": "Dramatic contrast between light and shadow",
-    "Minimalist Line Art": "Simple lines with emphasis on negative space",
-    "Vintage Pulp": "1930s-50s pulp magazine aesthetic with halftone dots",
-    "Sketch/Pencil Drawing": "Hand-drawn graphite aesthetic with crosshatching",
-}
-
-TONE_DESCRIPTIONS = {
-    "Philosophical": "Contemplative exploration of existential themes",
-    "Satirical": "Biting social commentary with ironic wit",
-    "Romantic": "Passionate focus on love, beauty, and emotional depth",
-    "Contemplative": "Meditative and introspective narrative voice",
-    "Tragic": "Exploration of human suffering and inevitable downfall",
-    "Noir Detective": "Cynical and morally ambiguous mystery atmosphere",
-    "Cosmic Horror": "Existential dread and unknowable cosmic forces",
-    "Gothic": "Atmospheric psychological horror with decaying settings",
-}
-
 # Page count limits
 MIN_PAGES_PRODUCTION = 10
 MAX_PAGES_PRODUCTION = 200
 RECOMMENDED_MAX_PAGES = 150  # Quality/time sweet spot
 
 MIN_PAGES_TEST = 1
-MAX_PAGES_TEST = 10
 DEFAULT_PAGES_TEST = 3
 
 # Word density thresholds (words per page)
