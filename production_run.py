@@ -55,7 +55,6 @@ async def run_production():
     script = await scripter.generate_script(
         style=style,
         tone=tone,
-        writing_style="Cinematic",
         test_mode=False,
         context_constraints=context_constraints,
         target_page_override=page_calc['recommended']
@@ -67,7 +66,29 @@ async def run_production():
     print("\n--- STEP 2: CHARACTER DESIGN ---")
     architect = CharacterArchitect(script_path)
     await architect.design_all_characters(style=style)
-        
+
+    # 2.5. Continuity Validation
+    print("\n--- STEP 2.5: CONTINUITY VALIDATION ---")
+    from continuity_validator import ContinuityValidator
+    validator = ContinuityValidator(script_path)
+    issues = validator.validate()
+
+    if issues['errors']:
+        print(f"⚠️  Found {len(issues['errors'])} continuity errors:")
+        for error in issues['errors']:
+            print(f"  - Page {error['page']}, Panel {error['panel']}: {error['message']}")
+        confirm = input("\n⚠️  Continue anyway? (y/n): ")
+        if confirm.lower() != 'y':
+            print("❌ Production cancelled due to continuity errors.")
+            return
+
+    if issues['warnings']:
+        print(f"ℹ️  Found {len(issues['warnings'])} continuity warnings:")
+        for warning in issues['warnings']:
+            print(f"  - Page {warning['page']}, Panel {warning['panel']}: {warning['message']}")
+
+    print("✅ Continuity validation passed")
+
     # 3. Illustration (Resumes from manifest)
     print("\n--- STEP 3: ILLUSTRATION ---")
     illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone")

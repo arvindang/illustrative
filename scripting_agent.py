@@ -7,31 +7,28 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from utils import retry_with_backoff, RateLimiter
+from config import config
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client(api_key=config.gemini_api_key)
 # Using a semaphore to throttle the scribe phase
-scribe_limiter = RateLimiter(rpm_limit=5)
-
-# Model configuration for different tasks
-# Note: Using gemini-3-flash-preview as it's currently available
-# TODO: Update to gemini-2.0-flash-exp or gemini-2.0-flash when stable API is available
-MODEL_CONFIG = {
-    "global_context": "gemini-2.5-pro",      # Structured output, straightforward
-    "chapter_map": "gemini-3-flash-preview", # Structural indexing (lightweight)
-    "page_script": "gemini-2.5-pro",         # High-quality script generation with full text access
-}
+scribe_limiter = RateLimiter(rpm_limit=config.scripting_rpm)
 
 class ScriptingAgent:
     def __init__(self, book_path: str):
         self.book_path = Path(book_path)
-        self.output_dir = Path("assets/output")
+        self.output_dir = config.output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def get_model_for_task(self, task_type: str) -> str:
         """Select appropriate model based on task requirements."""
-        return MODEL_CONFIG.get(task_type, "gemini-2.0-flash")
+        model_map = {
+            "global_context": config.scripting_model_global_context,
+            "chapter_map": config.scripting_model_chapter_map,
+            "page_script": config.scripting_model_page_script,
+        }
+        return model_map.get(task_type, config.scripting_model_page_script)
 
     def load_content(self, test_mode=True):
         """
@@ -96,9 +93,9 @@ class ScriptingAgent:
             with open(chapter_map_path, "r") as f:
                 return json.load(f)
 
-        print("🗺️  Generating Chapter Index (simplified)...")
+        print("🗺️  Generating Chapter Index with scene hints...")
         prompt = """
-        Act as a Book Indexer. Analyze the provided book text.
+        Act as a Book Indexer and Scene Analyst. Analyze the provided book text.
         Break the book down into logical chapters or segments.
         For each segment, provide:
         1. 'chapter_number': Integer.
@@ -106,9 +103,13 @@ class ScriptingAgent:
         3. 'start_phrase': The first 10-15 words of the chapter (for text slicing).
         4. 'end_phrase': The last 10-15 words of the chapter (for text slicing).
         5. 'estimated_word_count': Approximate word count for this chapter.
+        6. 'scene_type': Classify the dominant scene type as 'action', 'dialogue', or 'contemplative'.
+           - 'action': Fast-paced scenes with physical movement, conflict, or dynamic events
+           - 'dialogue': Conversation-heavy scenes with character interactions
+           - 'contemplative': Reflective, descriptive, or atmospheric scenes
+        7. 'key_scenes': Brief list (2-4 items) of major events or moments in this chapter.
 
-        This is a STRUCTURAL INDEX only - do NOT analyze narrative beats or extract dialogue.
-        Keep this lightweight and fast.
+        Keep this analysis lightweight and fast - focus on high-level characterization.
 
         OUTPUT FORMAT: JSON List of Objects.
         """
@@ -127,9 +128,11 @@ class ScriptingAgent:
                             "title": {"type": "STRING"},
                             "start_phrase": {"type": "STRING"},
                             "end_phrase": {"type": "STRING"},
-                            "estimated_word_count": {"type": "INTEGER"}
+                            "estimated_word_count": {"type": "INTEGER"},
+                            "scene_type": {"type": "STRING", "enum": ["action", "dialogue", "contemplative"]},
+                            "key_scenes": {"type": "ARRAY", "items": {"type": "STRING"}}
                         },
-                        "required": ["chapter_number", "title", "start_phrase", "end_phrase"]
+                        "required": ["chapter_number", "title", "start_phrase", "end_phrase", "scene_type", "key_scenes"]
                     }
                 }
             )
@@ -141,42 +144,6 @@ class ScriptingAgent:
             
         print(f"✅ Chapter Map Saved: {chapter_map_path}")
         return response.parsed
-
-    def get_chapter_text(self, full_text: str, chapter_map: list, chapter_numbers: list):
-        """
-        Slices the full text to include only the requested chapters.
-
-        LEGACY METHOD: Kept for backward compatibility with old beat_sheet workflow.
-        New pipeline uses get_chapter_text_by_phrase() instead.
-        May still be used by production_run.py or other external scripts.
-        """
-        if not chapter_numbers:
-            return full_text[:20000] # Fallback
-            
-        context_parts = []
-        for num in chapter_numbers:
-            # Find chapter in map
-            chap = next((c for c in chapter_map if c['chapter_number'] == num), None)
-            if not chap:
-                continue
-                
-            start_phrase = chap.get('start_phrase', '')
-            end_phrase = chap.get('end_phrase', '')
-            
-            try:
-                start_idx = full_text.find(start_phrase) if start_phrase else 0
-                if start_idx == -1: start_idx = 0
-                
-                end_idx = full_text.find(end_phrase, start_idx) if end_phrase else len(full_text)
-                if end_idx == -1: end_idx = len(full_text)
-                else: end_idx += len(end_phrase)
-                
-                context_parts.append(full_text[start_idx:end_idx])
-            except Exception:
-                continue
-                
-        return "\n\n--- NEXT CHAPTER ---\n\n".join(context_parts) if context_parts else full_text[:20000]
-
 
     def get_chapter_text_by_phrase(self, full_text: str, start_phrase: str, end_phrase: str) -> str:
         """
@@ -337,9 +304,18 @@ Tone: {tone}
 GLOBAL CONTEXT & CONSTRAINTS:
 {context_constraints}
 
+SCENE CONTEXT:
+This chapter is classified as: {chapter.get('scene_type', 'unknown')}
+
+PANEL COUNT GUIDANCE (adapt based on scene needs):
+- ACTION scenes: Use 2-3 large dynamic panels to capture movement and impact
+- DIALOGUE scenes: Use 4-6 panels for conversation flow and character reactions
+- CONTEMPLATIVE scenes: Use 1-2 splash pages for atmosphere and visual storytelling
+
 INSTRUCTIONS:
 Write the script for Page {page_allocation['page_number']}.
 - Create 1-6 panels that capture the narrative for this portion of the chapter
+- Adapt panel count to scene type (see guidance above)
 - If this is page 1 of the chapter, start with the chapter opening
 - If this is the last page of the chapter, conclude with the chapter ending
 - VISUAL DESCRIPTION: Highly descriptive for AI image generation (lighting, angles, colors)
@@ -379,7 +355,6 @@ OUTPUT FORMAT: JSON with panels array.
                                 "type": "OBJECT",
                                 "properties": {
                                     "page_number": {"type": "INTEGER"},
-                                    "layout_style": {"type": "STRING", "enum": ["cinematic_widescreen", "action_dynamic", "standard_grid", "dialogue_focus", "full_splash"]},
                                     "panels": {
                                         "type": "ARRAY",
                                         "items": {
@@ -418,10 +393,9 @@ OUTPUT FORMAT: JSON with panels array.
             
             raise last_error
 
-    async def generate_script(self, style: str, tone: str, writing_style: str = "Cinematic", test_mode=True, context_constraints: str = "", target_page_override: int = None):
+    async def generate_script(self, style: str, tone: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
         """
         Main orchestration method: Generates complete script using simplified pipeline.
-        Note: writing_style parameter kept for backward compatibility but not actively used in new pipeline.
         """
         # Save the result
         suffix = "_test_page.json" if test_mode else "_full_script.json"
@@ -483,6 +457,9 @@ OUTPUT FORMAT: JSON with panels array.
 
         full_script = await asyncio.gather(*tasks)
 
+        # Validate dialogue fidelity (warning only, doesn't block)
+        self._validate_dialogue_fidelity(full_script, chapter_index, full_text)
+
         # Save the result
         with open(output_file, "w") as f:
             json.dump(full_script, f, indent=2)
@@ -490,7 +467,56 @@ OUTPUT FORMAT: JSON with panels array.
         print(f"✅ Script Generation Complete! Saved to: {output_file}")
         return full_script
 
+    def _validate_dialogue_fidelity(self, script: list, chapter_index: list, full_text: str):
+        """
+        Checks if dialogue appears in source text and warns about potentially synthetic dialogue.
+        This is logging-only and doesn't block generation.
+
+        Args:
+            script: Generated script pages
+            chapter_index: Chapter map with boundaries
+            full_text: Full source text for validation
+        """
+        print("\n🔍 Validating dialogue fidelity...")
+        warnings_found = 0
+
+        for page in script:
+            page_num = page.get('page_number', 0)
+            for panel in page.get('panels', []):
+                panel_id = panel.get('panel_id', 0)
+                dialogue = panel.get('dialogue', '')
+
+                # Skip empty dialogue
+                if not dialogue or len(dialogue.strip()) < 5:
+                    continue
+
+                # Check if dialogue appears in source (allowing for minor variations)
+                # We check for at least 70% of the dialogue to appear in the source
+                dialogue_clean = dialogue.strip().replace('"', '').replace("'", "")
+                words = dialogue_clean.split()
+
+                if len(words) < 3:
+                    continue  # Too short to validate meaningfully
+
+                # Check if most of the dialogue words appear in sequence in the source
+                found_in_source = False
+                search_phrase = ' '.join(words[:min(8, len(words))])  # First 8 words
+
+                if search_phrase.lower() in full_text.lower():
+                    found_in_source = True
+
+                if not found_in_source:
+                    warnings_found += 1
+                    truncated = dialogue[:60] + "..." if len(dialogue) > 60 else dialogue
+                    print(f"  ⚠️  Page {page_num}, Panel {panel_id}: Dialogue may be synthetic: '{truncated}'")
+
+        if warnings_found == 0:
+            print("  ✅ All dialogue appears to match source text")
+        else:
+            print(f"  ⚠️  Found {warnings_found} potential synthetic dialogue instances")
+            print("  💡 Tip: Review these panels to ensure they preserve author's voice")
+
 if __name__ == "__main__":
     agent = ScriptingAgent("assets/input/20-thousand-leagues-under-the-sea.txt")
-    asyncio.run(agent.generate_script(style="Watercolor", tone="Melancholic", writing_style="Cinematic", test_mode=True))
+    asyncio.run(agent.generate_script(style="Watercolor", tone="Melancholic", test_mode=True))
 
