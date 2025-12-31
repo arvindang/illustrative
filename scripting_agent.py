@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
@@ -180,20 +181,52 @@ class ScriptingAgent:
     def get_chapter_text_by_phrase(self, full_text: str, start_phrase: str, end_phrase: str) -> str:
         """
         Extract chapter text using start and end phrases.
-        More reliable than line number indexing.
+        Uses regex to find phrases robustly (ignoring whitespace differences).
         """
-        start_idx = full_text.find(start_phrase)
-        end_idx = full_text.find(end_phrase, start_idx)
+        def find_fuzzy(text, phrase, start_pos=0):
+            if not phrase:
+                return -1, -1
+            # Split phrase into words and escape them
+            words = phrase.strip().split()
+            if not words:
+                return -1, -1
+            
+            # Create pattern: word followed by one or more whitespace characters
+            # The last word doesn't need following whitespace matching in the pattern itself
+            # but we want to match the whole sequence.
+            pattern_str = r'\s+'.join(map(re.escape, words))
+            
+            # Case insensitive search might be safer too? For now, stick to case sensitive 
+            # as the model usually gets casing right from the text.
+            match = re.search(pattern_str, text[start_pos:])
+            
+            if match:
+                return match.start() + start_pos, match.end() + start_pos
+            return -1, -1
 
-        if start_idx == -1 or end_idx == -1:
-            # Fallback: return empty or raise error
-            print(f"⚠️ Could not locate chapter boundaries")
+        start_idx, _ = find_fuzzy(full_text, start_phrase)
+
+        if start_idx == -1:
+            # Fallback: try simple string find if regex fails for some reason
+            start_idx = full_text.find(start_phrase)
+        
+        if start_idx == -1:
+            print(f"⚠️ Could not locate start phrase: '{start_phrase[:30]}...'")
             return ""
 
-        # Include the end phrase
-        end_idx += len(end_phrase)
+        # Search for end phrase AFTER the start index
+        _, end_end = find_fuzzy(full_text, end_phrase, start_idx)
+        
+        if end_end == -1:
+            end_end = full_text.find(end_phrase, start_idx)
+            if end_end != -1:
+                end_end += len(end_phrase)
 
-        return full_text[start_idx:end_idx]
+        if end_end == -1:
+            print(f"⚠️ Could not locate end phrase: '{end_phrase[:30]}...'")
+            return ""
+
+        return full_text[start_idx:end_end]
 
     def allocate_pages_simple(self, chapter_index: list, target_page_count: int) -> list:
         """
