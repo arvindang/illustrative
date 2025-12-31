@@ -3,11 +3,97 @@ import json
 import asyncio
 import re
 from pathlib import Path
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from utils import retry_with_backoff, RateLimiter
 from config import config
+
+
+@dataclass
+class PageContext:
+    """Rolling context passed between sequential page generations."""
+    last_panel_summary: str = ""
+    character_states: dict = field(default_factory=dict)
+    # Format: {"Captain Nemo": {"gear": ["harpoon"], "position": "bridge", "mood": "determined"}}
+    open_dialogue_threads: list = field(default_factory=list)
+    scene_momentum: str = "establishing"  # establishing | rising | climax | falling | resolution
+
+
+# Arc weights for narrative-aware page allocation
+ARC_WEIGHTS = {
+    "action": 1.3,        # Action-heavy chapters get 30% more pages
+    "dialogue": 1.0,      # Standard density
+    "contemplative": 0.8, # Reflective chapters slightly compressed
+}
+
+
+def get_position_weight(chapter_num: int, total_chapters: int) -> float:
+    """Weight chapters by narrative position (three-act structure)."""
+    position = chapter_num / total_chapters
+    if position < 0.25:      # Act 1: Setup
+        return 0.9
+    elif position < 0.75:    # Act 2: Confrontation (includes midpoint)
+        if 0.45 < position < 0.55:  # Midpoint
+            return 1.2
+        return 1.0
+    else:                    # Act 3: Resolution
+        if position > 0.85:  # Climax zone
+            return 1.4
+        return 1.1
+
+
+def extract_context_from_page(page: dict, previous_context: PageContext) -> PageContext:
+    """Extract rolling context from a completed page for the next page."""
+    panels = page.get('panels', [])
+    if not panels:
+        return previous_context
+
+    # Get the final panel
+    final_panel = panels[-1]
+
+    # Build summary of final panel
+    last_panel_summary = f"Panel {final_panel.get('panel_id')}: {final_panel.get('visual_description', '')[:150]}"
+    if final_panel.get('dialogue'):
+        last_panel_summary += f" | Dialogue: \"{final_panel.get('dialogue')[:80]}...\""
+
+    # Update character states from all panels
+    character_states = previous_context.character_states.copy()
+    for panel in panels:
+        advice = panel.get('advice', {})
+        gear_info = advice.get('character_gear', '')
+        continuity = advice.get('continuity_notes', '')
+
+        for char in panel.get('characters', []):
+            if char not in character_states:
+                character_states[char] = {"gear": [], "position": "", "mood": ""}
+            # Parse gear from advice
+            if char.lower() in gear_info.lower():
+                character_states[char]["gear_note"] = gear_info
+            if char.lower() in continuity.lower():
+                character_states[char]["continuity_note"] = continuity
+
+    # Detect open dialogue threads (questions, interrupted speech)
+    open_threads = []
+    for panel in panels[-2:]:  # Check last 2 panels
+        dialogue = panel.get('dialogue', '')
+        if dialogue.endswith('?') or dialogue.endswith('...') or dialogue.endswith('—'):
+            chars = panel.get('characters', [])
+            speaker = chars[0] if chars else 'Narrator'
+            open_threads.append(f"{speaker}: \"{dialogue[-60:]}\"")
+
+    # Determine scene momentum based on panel density and content
+    panel_count = len(panels)
+    has_action = any('action' in p.get('visual_description', '').lower() for p in panels)
+    momentum = "rising" if panel_count >= 4 or has_action else "establishing"
+
+    return PageContext(
+        last_panel_summary=last_panel_summary,
+        character_states=character_states,
+        open_dialogue_threads=open_threads[-3:],  # Keep last 3 threads
+        scene_momentum=momentum
+    )
 
 load_dotenv()
 
@@ -195,36 +281,48 @@ class ScriptingAgent:
 
         return full_text[start_idx:end_end]
 
-    def allocate_pages_simple(self, chapter_index: list, target_page_count: int) -> list:
+    def allocate_pages_arc_aware(self, chapter_index: list, target_page_count: int) -> list:
         """
-        Simple page allocation based on word count distribution.
-        Each chapter gets pages proportional to its word count.
+        Arc-aware page allocation using scene type and narrative position weights.
+        Climax chapters get more pages; setup chapters get slightly fewer.
 
         Returns: List of page allocations with chapter assignments
         """
+        total_chapters = len(chapter_index)
+
+        # Calculate weighted word counts
+        weighted_counts = []
+        for ch in chapter_index:
+            base_words = ch.get('estimated_word_count', 1000)
+            scene_weight = ARC_WEIGHTS.get(ch.get('scene_type', 'dialogue'), 1.0)
+            position_weight = get_position_weight(ch['chapter_number'], total_chapters)
+            weighted_counts.append(base_words * scene_weight * position_weight)
+
+        total_weighted = sum(weighted_counts)
         total_words = sum(ch.get('estimated_word_count', 1000) for ch in chapter_index)
-        words_per_page = total_words / target_page_count
 
-        print(f"📊 Page Allocation: {total_words:,} words ÷ {target_page_count} pages = {words_per_page:.0f} words/page")
+        print(f"📊 Arc-Aware Page Allocation: {total_words:,} words across {total_chapters} chapters")
+        print(f"   Using scene-type and three-act position weights")
 
+        # Allocate pages proportionally to weighted counts
         page_allocations = []
         current_page = 1
 
-        for chapter in chapter_index:
-            chapter_words = chapter.get('estimated_word_count', 1000)
-            chapter_pages = max(1, round(chapter_words / words_per_page))
+        for i, chapter in enumerate(chapter_index):
+            chapter_share = weighted_counts[i] / total_weighted
+            chapter_pages = max(1, round(chapter_share * target_page_count))
+            position_weight = get_position_weight(chapter['chapter_number'], total_chapters)
 
-            # Assign pages to this chapter
-            for i in range(chapter_pages):
+            for j in range(chapter_pages):
                 if current_page > target_page_count:
                     break
-
                 page_allocations.append({
                     'page_number': current_page,
                     'chapter_number': chapter['chapter_number'],
                     'chapter_title': chapter['title'],
-                    'page_within_chapter': i + 1,
-                    'total_pages_in_chapter': chapter_pages
+                    'page_within_chapter': j + 1,
+                    'total_pages_in_chapter': chapter_pages,
+                    'arc_position': 'climax' if position_weight >= 1.3 else 'standard'
                 })
                 current_page += 1
 
@@ -234,7 +332,7 @@ class ScriptingAgent:
         # Trim to exact target (in case rounding gave us extra)
         page_allocations = page_allocations[:target_page_count]
 
-        print(f"✅ Allocated {len(page_allocations)} pages across {len(chapter_index)} chapters")
+        print(f"✅ Allocated {len(page_allocations)} pages across {total_chapters} chapters")
         return page_allocations
 
 
@@ -247,10 +345,12 @@ class ScriptingAgent:
         style: str,
         tone: str,
         context_constraints: str = "",
-        dialogue_mode: str = "balanced"
+        dialogue_mode: str = "balanced",
+        previous_context: PageContext = None  # Rolling context from previous page
     ):
         """
         THE SCRIBE: Writes the detailed panel directions for a SINGLE page with FULL TEXT ACCESS.
+        Now includes cross-page context for continuity.
         """
         async with scribe_limiter:
             # Get chapter info
@@ -290,6 +390,46 @@ NEXT CHAPTER (for context):
 {next_chapter_text}
 """
 
+            # Build continuity context from previous page
+            continuity_context = ""
+            if previous_context and previous_context.last_panel_summary:
+                char_states_str = json.dumps(previous_context.character_states, indent=2) if previous_context.character_states else "No tracked characters yet."
+                threads_str = "\n".join(f"- {t}" for t in previous_context.open_dialogue_threads) if previous_context.open_dialogue_threads else "None."
+                continuity_context = f"""
+CONTINUITY FROM PREVIOUS PAGE:
+Last panel: {previous_context.last_panel_summary}
+
+Character states entering this page:
+{char_states_str}
+
+Open dialogue/narrative threads:
+{threads_str}
+
+Scene momentum: {previous_context.scene_momentum}
+
+CRITICAL: Maintain visual and narrative continuity with the above. If a character was holding a prop, they should still have it unless explicitly dropped. Continue any open dialogue threads naturally.
+"""
+
+            # Build dialogue mode guidance
+            dialogue_guidance = {
+                "dialogue_heavy": """
+DIALOGUE EMPHASIS:
+- Prioritize character speech over narration boxes
+- Use visual storytelling to convey prose descriptions
+- Narration only for scene transitions or critical exposition
+- Target: 70% dialogue, 30% narration""",
+                "balanced": """
+DIALOGUE BALANCE:
+- Mix dialogue and narration naturally
+- Use narration for internal thoughts and scene-setting
+- Target: 50% dialogue, 50% narration""",
+                "narration_heavy": """
+NARRATION EMPHASIS:
+- Favor caption boxes for prose-style storytelling
+- Dialogue for key character moments only
+- Target: 30% dialogue, 70% narration"""
+            }.get(dialogue_mode, "")
+
             prompt = f"""
 Act as a Graphic Novel Scriptwriter.
 
@@ -303,7 +443,7 @@ Tone: {tone}
 
 GLOBAL CONTEXT & CONSTRAINTS:
 {context_constraints}
-
+{continuity_context}
 SCENE CONTEXT:
 This chapter is classified as: {chapter.get('scene_type', 'unknown')}
 
@@ -311,7 +451,7 @@ PANEL COUNT GUIDANCE (adapt based on scene needs):
 - ACTION scenes: Use 2-3 large dynamic panels to capture movement and impact
 - DIALOGUE scenes: Use 4-6 panels for conversation flow and character reactions
 - CONTEMPLATIVE scenes: Use 1-2 splash pages for atmosphere and visual storytelling
-
+{dialogue_guidance}
 INSTRUCTIONS:
 Write the script for Page {page_allocation['page_number']}.
 - Create 1-6 panels that capture the narrative for this portion of the chapter
@@ -434,28 +574,33 @@ OUTPUT FORMAT: JSON with panels array.
         print("🗺️  Generating Chapter Index...")
         chapter_index = await self.generate_chapter_map(full_text)
 
-        # 2. SIMPLIFIED PAGE ALLOCATION
-        # Allocate pages based on word count distribution
+        # 2. ARC-AWARE PAGE ALLOCATION
+        # Allocate pages using scene type and narrative position weights
         print(f"📊 Allocating {target_pages} pages across chapters...")
-        page_allocations = self.allocate_pages_simple(chapter_index, target_pages)
+        page_allocations = self.allocate_pages_arc_aware(chapter_index, target_pages)
 
-        # 3. THE SCRIBE PHASE
-        # Generate all pages in parallel with full text access
-        print(f"✍️  Scripting {len(page_allocations)} pages in parallel...")
+        # 3. THE SCRIBE PHASE - Sequential with rolling context
+        # Generate pages sequentially to maintain cross-page continuity
+        print(f"✍️  Scripting {len(page_allocations)} pages sequentially with cross-page context...")
 
-        tasks = []
+        full_script = []
+        rolling_context = PageContext()
+
         for page_alloc in page_allocations:
-            tasks.append(self.write_page_script(
+            page = await self.write_page_script(
                 page_alloc,
                 full_text,
                 chapter_index,
                 style,
                 tone,
                 context_constraints,
-                dialogue_mode='balanced'
-            ))
+                dialogue_mode='balanced',
+                previous_context=rolling_context
+            )
+            full_script.append(page)
 
-        full_script = await asyncio.gather(*tasks)
+            # Extract context for next page
+            rolling_context = extract_context_from_page(page, rolling_context)
 
         # Validate dialogue fidelity (warning only, doesn't block)
         self._validate_dialogue_fidelity(full_script, chapter_index, full_text)
