@@ -202,12 +202,7 @@ class IllustratorAgent:
         
         await asyncio.gather(*tasks)
 
-        # 4. Save the UPDATED script with optimized bubble positions
-        # This ensures the CompositorAgent uses the vision-verified coordinates.
-        optimized_script_path = self.script_path.parent / (self.script_path.stem + "_optimized.json")
-        with open(optimized_script_path, "w") as f:
-            json.dump(script_data, f, indent=2)
-        print(f"\n✅ Production Complete! Optimized script saved to: {optimized_script_path}")
+        print(f"\n✅ Production Complete! All panels generated.")
 
 if __name__ == "__main__":
     # Configuration
