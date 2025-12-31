@@ -138,7 +138,7 @@ def main():
                 # Run Architect Phase
                 scripter = ScriptingAgent(str(input_path))
                 
-                with st.spinner("🗺️ Mapping Chapters & Detecting Context (Gemini 3.0 Flash)..."):
+                with st.spinner("🗺️ Mapping Chapters & Detecting Context ..."):
                     full_text = scripter.load_content(test_mode=False)
                     
                     # Parallelize mapping and context analysis
@@ -221,7 +221,7 @@ def main():
                 full_text = scripter.load_content(test_mode=False)
                 chapter_map = st.session_state.chapter_map
                 
-                with st.spinner("✍️ Writing Scene Scripts in parallel (Gemini 3.0 Flash)..."):
+                with st.spinner("✍️ Writing Scene Scripts in parallel ..."):
                     # Use the parallelized generate_script or gather write_page_script calls
                     async def write_full_script():
                         tasks = []
@@ -416,12 +416,8 @@ def main():
                 
                 # 2. Composition
                 status_container.write("📐 Assembling Final Pages...")
-                
-                # Check for optimized script (vision-verified bubble placements)
-                optimized_script = script_path.parent / f"{script_path.stem}_optimized.json"
-                final_script_path = str(optimized_script) if optimized_script.exists() else str(script_path)
-                
-                compositor = CompositorAgent(final_script_path)
+
+                compositor = CompositorAgent(str(script_path))
                 compositor.run()
                 
                 status_container.update(label="✅ Production Complete!", state="complete", expanded=False)

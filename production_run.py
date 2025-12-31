@@ -75,9 +75,7 @@ async def run_production():
     
     # 4. Composition
     print("\n--- STEP 4: COMPOSITION ---")
-    optimized_script = Path("assets/output/20-thousand-leagues-under-the-sea_full_script_optimized.json")
-    final_script = str(optimized_script) if optimized_script.exists() else script_path
-    compositor = CompositorAgent(final_script)
+    compositor = CompositorAgent(script_path)
     compositor.run()
     
     print(f"\n✅ Production Complete! Generated {page_calc['recommended']} pages. Check assets/output/final_pages/")
