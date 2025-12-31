@@ -19,6 +19,9 @@ class PageContext:
     # Format: {"Captain Nemo": {"gear": ["harpoon"], "position": "bridge", "mood": "determined"}}
     open_dialogue_threads: list = field(default_factory=list)
     scene_momentum: str = "establishing"  # establishing | rising | climax | falling | resolution
+    # NEW: Emotional thread tracking
+    current_emotional_beat: str = "" 
+    visual_motifs: list = field(default_factory=list) # e.g., "The growing shadow", "The ticking clock"
 
 
 # Arc weights for narrative-aware page allocation
@@ -60,6 +63,8 @@ def extract_context_from_page(page: dict, previous_context: PageContext) -> Page
 
     # Update character states from all panels
     character_states = previous_context.character_states.copy()
+    visual_motifs = previous_context.visual_motifs.copy()
+    
     for panel in panels:
         advice = panel.get('advice', {})
         gear_info = advice.get('character_gear', '')
@@ -73,7 +78,10 @@ def extract_context_from_page(page: dict, previous_context: PageContext) -> Page
                 character_states[char]["gear_note"] = gear_info
             if char.lower() in continuity.lower():
                 character_states[char]["continuity_note"] = continuity
-
+    
+    # Update visual motifs if new ones appear (simplified logic)
+    # In a real system, we'd have the LLM explicitly output active motifs
+    
     # Detect open dialogue threads (questions, interrupted speech)
     open_threads = []
     for panel in panels[-2:]:  # Check last 2 panels
@@ -92,7 +100,9 @@ def extract_context_from_page(page: dict, previous_context: PageContext) -> Page
         last_panel_summary=last_panel_summary,
         character_states=character_states,
         open_dialogue_threads=open_threads[-3:],  # Keep last 3 threads
-        scene_momentum=momentum
+        scene_momentum=momentum,
+        current_emotional_beat=previous_context.current_emotional_beat, # Persist for now
+        visual_motifs=visual_motifs
     )
 
 load_dotenv()
@@ -179,23 +189,22 @@ class ScriptingAgent:
             with open(chapter_map_path, "r") as f:
                 return json.load(f)
 
-        print("🗺️  Generating Chapter Index with scene hints...")
+        print("🗺️  Generating Chapter Index with Beat Sheet...")
         prompt = """
-        Act as a Book Indexer and Scene Analyst. Analyze the provided book text.
-        Break the book down into logical chapters or segments.
-        For each segment, provide:
+        Act as a Master Storyboard Artist and Screenwriter. 
+        Analyze the provided text and create a 'Beat Sheet' for a Graphic Novel.
+
+        For each chapter, identify:
         1. 'chapter_number': Integer.
-        2. 'title': Short descriptive title for this chapter.
+        2. 'title': Short descriptive title.
         3. 'start_phrase': The first 10-15 words of the chapter (for text slicing).
         4. 'end_phrase': The last 10-15 words of the chapter (for text slicing).
-        5. 'estimated_word_count': Approximate word count for this chapter.
-        6. 'scene_type': Classify the dominant scene type as 'action', 'dialogue', or 'contemplative'.
-           - 'action': Fast-paced scenes with physical movement, conflict, or dynamic events
-           - 'dialogue': Conversation-heavy scenes with character interactions
-           - 'contemplative': Reflective, descriptive, or atmospheric scenes
-        7. 'key_scenes': Brief list (2-4 items) of major events or moments in this chapter.
-
-        Keep this analysis lightweight and fast - focus on high-level characterization.
+        5. 'estimated_word_count': Approximate word count.
+        6. 'scene_type': 'action', 'dialogue', or 'contemplative'.
+        7. 'narrative_arc': (Setup, Inciting Incident, Rising Action, Climax, or Resolution).
+        8. 'beats': A list of emotional beats. Format: {"description": "...", "emotional_shift": "from X to Y"}.
+        9. 'visual_theme': A recurring visual element for this chapter (e.g., 'claustrophobic interior', 'vast cold ocean').
+        10. 'dialogue_distillation': The single most important line of dialogue that must be preserved.
 
         OUTPUT FORMAT: JSON List of Objects.
         """
@@ -216,9 +225,21 @@ class ScriptingAgent:
                             "end_phrase": {"type": "STRING"},
                             "estimated_word_count": {"type": "INTEGER"},
                             "scene_type": {"type": "STRING", "enum": ["action", "dialogue", "contemplative"]},
-                            "key_scenes": {"type": "ARRAY", "items": {"type": "STRING"}}
+                            "narrative_arc": {"type": "STRING"},
+                            "beats": {
+                                "type": "ARRAY",
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "description": {"type": "STRING"},
+                                        "emotional_shift": {"type": "STRING"}
+                                    }
+                                }
+                            },
+                            "visual_theme": {"type": "STRING"},
+                            "dialogue_distillation": {"type": "STRING"}
                         },
-                        "required": ["chapter_number", "title", "start_phrase", "end_phrase", "scene_type", "key_scenes"]
+                        "required": ["chapter_number", "title", "start_phrase", "end_phrase", "scene_type", "narrative_arc", "beats", "visual_theme"]
                     }
                 }
             )
@@ -231,62 +252,69 @@ class ScriptingAgent:
         print(f"✅ Chapter Map Saved: {chapter_map_path}")
         return response.parsed
 
-    def get_chapter_text_by_phrase(self, full_text: str, start_phrase: str, end_phrase: str) -> str:
+    def get_chapter_text(self, full_text: str, chapter: dict, next_chapter: dict = None) -> str:
         """
-        Extract chapter text using start and end phrases.
-        Uses regex to find phrases robustly (ignoring whitespace differences).
+        Extract chapter text robustly using start/end phrases or next chapter start.
         """
         def find_fuzzy(text, phrase, start_pos=0):
             if not phrase:
-                return -1, -1
-            # Split phrase into words and escape them
+                return -1
             words = phrase.strip().split()
             if not words:
-                return -1, -1
-            
+                return -1
             # Create pattern: word followed by one or more whitespace characters
-            # The last word doesn't need following whitespace matching in the pattern itself
-            # but we want to match the whole sequence.
             pattern_str = r'\s+'.join(map(re.escape, words))
-            
-            # Case insensitive search might be safer too? For now, stick to case sensitive 
-            # as the model usually gets casing right from the text.
             match = re.search(pattern_str, text[start_pos:])
-            
             if match:
-                return match.start() + start_pos, match.end() + start_pos
-            return -1, -1
+                return match.start() + start_pos
+            return -1
 
-        start_idx, _ = find_fuzzy(full_text, start_phrase)
-
+        # 1. Find Start
+        start_phrase = chapter.get('start_phrase', '')
+        start_idx = find_fuzzy(full_text, start_phrase)
+        
         if start_idx == -1:
-            # Fallback: try simple string find if regex fails for some reason
+            # Fallback: simple string find
             start_idx = full_text.find(start_phrase)
-        
+            
         if start_idx == -1:
-            print(f"⚠️ Could not locate start phrase: '{start_phrase[:30]}...'")
+            print(f"⚠️ Could not locate start phrase for Ch {chapter['chapter_number']}: '{start_phrase[:30]}...'")
             return ""
 
-        # Search for end phrase AFTER the start index
-        _, end_end = find_fuzzy(full_text, end_phrase, start_idx)
+        # 2. Find End
+        end_idx = -1
+        end_phrase = chapter.get('end_phrase', '')
         
-        if end_end == -1:
-            end_end = full_text.find(end_phrase, start_idx)
-            if end_end != -1:
-                end_end += len(end_phrase)
+        # Try specific end phrase first
+        found_end_match_start = find_fuzzy(full_text, end_phrase, start_idx)
+        if found_end_match_start != -1:
+             # We want the END of the phrase
+             # Re-match to get length
+             match = re.search(r'\s+'.join(map(re.escape, end_phrase.split())), full_text[found_end_match_start:])
+             if match:
+                 end_idx = found_end_match_start + match.end()
 
-        if end_end == -1:
-            print(f"⚠️ Could not locate end phrase: '{end_phrase[:30]}...'")
-            return ""
+        # 3. Fallback to Next Chapter Start if end phrase missing
+        if end_idx == -1 and next_chapter:
+            next_start_phrase = next_chapter.get('start_phrase', '')
+            next_start_idx = find_fuzzy(full_text, next_start_phrase, start_idx)
+            if next_start_idx != -1:
+                end_idx = next_start_idx
+                print(f"  ℹ️  Used next chapter start as boundary for Ch {chapter['chapter_number']}")
 
-        return full_text[start_idx:end_end]
+        # 4. Final Fallback (just take a chunk if nothing else works)
+        if end_idx == -1:
+            print(f"⚠️ Could not locate end boundary for Ch {chapter['chapter_number']}. taking 20k chars.")
+            end_idx = min(len(full_text), start_idx + 20000)
+
+        return full_text[start_idx:end_idx].strip()
 
     def allocate_pages_arc_aware(self, chapter_index: list, target_page_count: int) -> list:
         """
         Arc-aware page allocation using scene type and narrative position weights.
         Climax chapters get more pages; setup chapters get slightly fewer.
 
-        Returns: List of page allocations with chapter assignments
+        Returns: List of page allocations with chapter assignments and PAGE GOALS.
         """
         total_chapters = len(chapter_index)
 
@@ -312,17 +340,30 @@ class ScriptingAgent:
             chapter_share = weighted_counts[i] / total_weighted
             chapter_pages = max(1, round(chapter_share * target_page_count))
             position_weight = get_position_weight(chapter['chapter_number'], total_chapters)
+            
+            arc = chapter.get('narrative_arc', 'Standard')
 
             for j in range(chapter_pages):
                 if current_page > target_page_count:
                     break
+                
+                # Determine Page Goal based on position in chapter
+                if j == 0:
+                    page_goal = "Establish Scene & Atmosphere"
+                elif j == chapter_pages - 1:
+                    page_goal = "End on Cliffhanger/Hook"
+                else:
+                    page_goal = "Build Tension/Deepen Character"
+
                 page_allocations.append({
                     'page_number': current_page,
                     'chapter_number': chapter['chapter_number'],
                     'chapter_title': chapter['title'],
                     'page_within_chapter': j + 1,
                     'total_pages_in_chapter': chapter_pages,
-                    'arc_position': 'climax' if position_weight >= 1.3 else 'standard'
+                    'arc_position': 'climax' if position_weight >= 1.3 else 'standard',
+                    'narrative_arc': arc,
+                    'page_goal': page_goal
                 })
                 current_page += 1
 
@@ -350,17 +391,20 @@ class ScriptingAgent:
     ):
         """
         THE SCRIBE: Writes the detailed panel directions for a SINGLE page with FULL TEXT ACCESS.
-        Now includes cross-page context for continuity.
+        Now uses Beat-Based Adaptation.
         """
         async with scribe_limiter:
             # Get chapter info
             chapter_num = page_allocation['chapter_number']
             chapter = next(ch for ch in chapter_index if ch['chapter_number'] == chapter_num)
+            
+            # Find next chapter for boundary
+            next_ch_struct = next((ch for ch in chapter_index if ch['chapter_number'] == chapter_num + 1), None)
 
             print(f"✍️  Scripting Page {page_allocation['page_number']}: Chapter {chapter_num} ({chapter['title']}) - Page {page_allocation['page_within_chapter']}/{page_allocation['total_pages_in_chapter']}...")
 
-            # Extract full chapter text using start/end phrases
-            chapter_text = self.get_chapter_text_by_phrase(full_text, chapter['start_phrase'], chapter['end_phrase'])
+            # Extract full chapter text using robust method
+            chapter_text = self.get_chapter_text(full_text, chapter, next_ch_struct)
 
             # Also include adjacent chapters for context (prevent boundary issues)
             prev_chapter_text = ""
@@ -369,14 +413,14 @@ class ScriptingAgent:
             if chapter_num > 1:
                 prev_ch = next((ch for ch in chapter_index if ch['chapter_number'] == chapter_num - 1), None)
                 if prev_ch:
-                    prev_full = self.get_chapter_text_by_phrase(full_text, prev_ch['start_phrase'], prev_ch['end_phrase'])
-                    prev_chapter_text = prev_full[-2000:] if len(prev_full) > 2000 else prev_full  # Last 2000 chars
+                    # We don't need next_ch for prev_ch extraction, just best effort
+                    prev_full = self.get_chapter_text(full_text, prev_ch, chapter)
+                    prev_chapter_text = prev_full # Pass full previous chapter
 
-            if chapter_num < len(chapter_index):
-                next_ch = next((ch for ch in chapter_index if ch['chapter_number'] == chapter_num + 1), None)
-                if next_ch:
-                    next_full = self.get_chapter_text_by_phrase(full_text, next_ch['start_phrase'], next_ch['end_phrase'])
-                    next_chapter_text = next_full[:2000] if len(next_full) > 2000 else next_full  # First 2000 chars
+            if next_ch_struct:
+                # We need next-next for next extraction? Just use None, it's context.
+                next_full = self.get_chapter_text(full_text, next_ch_struct, None)
+                next_chapter_text = next_full # Pass full next chapter
 
             # Build context
             full_context = f"""
@@ -407,76 +451,43 @@ Open dialogue/narrative threads:
 
 Scene momentum: {previous_context.scene_momentum}
 
-CRITICAL: Maintain visual and narrative continuity with the above. If a character was holding a prop, they should still have it unless explicitly dropped. Continue any open dialogue threads naturally.
+CRITICAL: Maintain visual and narrative continuity with the above.
 """
 
-            # Build dialogue mode guidance
-            dialogue_guidance = {
-                "dialogue_heavy": """
-DIALOGUE EMPHASIS:
-- Prioritize character speech over narration boxes
-- Use visual storytelling to convey prose descriptions
-- Narration only for scene transitions or critical exposition
-- Target: 70% dialogue, 30% narration""",
-                "balanced": """
-DIALOGUE BALANCE:
-- Mix dialogue and narration naturally
-- Use narration for internal thoughts and scene-setting
-- Target: 50% dialogue, 50% narration""",
-                "narration_heavy": """
-NARRATION EMPHASIS:
-- Favor caption boxes for prose-style storytelling
-- Dialogue for key character moments only
-- Target: 30% dialogue, 70% narration"""
-            }.get(dialogue_mode, "")
-
             prompt = f"""
-Act as a Graphic Novel Scriptwriter.
+Act as an Award-Winning Graphic Novel Scriptwriter.
 
 TASK:
-You are adapting Chapter {chapter_num}: "{chapter['title']}" into a graphic novel.
-This is Page {page_allocation['page_number']} of the entire adaptation.
-This is Page {page_allocation['page_within_chapter']} of {page_allocation['total_pages_in_chapter']} pages covering this chapter.
+Adapt Chapter {chapter_num} into Page {page_allocation['page_number']}.
+You are not just copying text; you are translating prose into a visual medium.
 
-Style: {style}
-Tone: {tone}
+STORYTELLING PRINCIPLES:
+- SHOW, DON'T TELL: If the prose says "He was angry," describe a panel of a clenched fist or a shattered glass.
+- COMPRESSION: One panel must often do the work of three paragraphs. 
+- DIALOGUE: Distill long speeches into 'comic-sized' bubbles (max 25 words per bubble). Preserve the AUTHOR'S VOICE, but remove fluff.
+- THE PAGE TURN: The final panel of this page MUST create curiosity or tension to make the reader turn the page.
 
-GLOBAL CONTEXT & CONSTRAINTS:
-{context_constraints}
+CONTINUITY & ARC:
 {continuity_context}
-SCENE CONTEXT:
-This chapter is classified as: {chapter.get('scene_type', 'unknown')}
+Chapter Arc: {page_allocation.get('narrative_arc', 'Standard')}
+Page Goal: {page_allocation.get('page_goal', 'Move story forward')}
+Visual Theme: {chapter.get('visual_theme', 'Standard')}
 
-PANEL COUNT GUIDANCE (adapt based on scene needs):
-- ACTION scenes: Use 2-3 large dynamic panels to capture movement and impact
-- DIALOGUE scenes: Use 4-6 panels for conversation flow and character reactions
-- CONTEMPLATIVE scenes: Use 1-2 splash pages for atmosphere and visual storytelling
-{dialogue_guidance}
-INSTRUCTIONS:
-Write the script for Page {page_allocation['page_number']}.
-- Create 1-6 panels that capture the narrative for this portion of the chapter
-- Adapt panel count to scene type (see guidance above)
-- If this is page 1 of the chapter, start with the chapter opening
-- If this is the last page of the chapter, conclude with the chapter ending
-- VISUAL DESCRIPTION: Highly descriptive for AI image generation (lighting, angles, colors)
-- DIALOGUE: PRESERVE character voice and emotional depth from the source text
-  * Adapt actual dialogue directly from the chapter text
-  * Maintain character speech patterns and personality
-  * Show, don't tell - use visuals to convey prose descriptions
-  CRITICAL: Do NOT include character names like "Narrator:" or "Nemo:" in the dialogue string. ONLY provide the text to be spoken or narrated.
-- BUBBLE POSITION: Ensure text doesn't cover faces
-- CHARACTERS: List specific sentient characters present (no objects/animals unless primary)
-  * DO NOT include objects (e.g., "Nautilus", "Ship", "Harpoon").
-  * DO NOT include animals unless they are primary characters.
-  * If no characters are present, return an empty list [].
-  * DO NOT use placeholders like "none" or "no characters".
-- ADVICE: Provide structured guidance:
-  * continuity_notes: Props, clothing, positions from previous panels
-  * historical_constraints: Era-specific requirements
-  * character_gear: What characters are holding, wearing
+PANEL COMPOSITION GUIDANCE:
+- Vary the "Camera Angle": (Wide Shot for setting, Close-up for emotion, Birds-eye for scale).
+- Panel 1: Must establish the "Where" and "Who" if the scene changed.
+- Last Panel: Must be a "Hook."
+- ACTION scenes: Use 2-3 large dynamic panels
+- DIALOGUE scenes: Use 4-6 panels for conversation flow
+
+OUTPUT REQUIREMENTS:
+- 'visual_description': Focus on cinematic lighting, character expression, and 'Mise-en-scène'.
+- 'dialogue': Naturalistic, punchy speech. No 'Narrator' tags inside the string.
+- 'caption': Use for internal monologue, narration, or time/location stamps.
+- 'characters': List specifically who is in the panel.
 
 CRITICAL: The FULL CHAPTER TEXT is provided below. Read it carefully and adapt dialogue
-and scenes directly from it. Do NOT synthesize or invent dialogue - use the author's actual words.
+and scenes directly from it, distilling for impact.
 
 OUTPUT FORMAT: JSON with panels array.
 """
@@ -503,6 +514,7 @@ OUTPUT FORMAT: JSON with panels array.
                                                 "panel_id": {"type": "INTEGER"},
                                                 "visual_description": {"type": "STRING"},
                                                 "dialogue": {"type": "STRING"},
+                                                "caption": {"type": "STRING"},
                                                 "advice": {
                                                     "type": "OBJECT",
                                                     "properties": {
@@ -513,9 +525,9 @@ OUTPUT FORMAT: JSON with panels array.
                                                     "required": ["continuity_notes", "historical_constraints", "character_gear"]
                                                 },
                                                 "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
-                                                "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]}
+                                                "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "caption-box"]}
                                             },
-                                            "required": ["panel_id", "visual_description", "dialogue", "advice", "characters", "bubble_position"]
+                                            "required": ["panel_id", "visual_description", "advice", "characters", "bubble_position"]
                                         }
                                     }
                                 },
@@ -614,52 +626,34 @@ OUTPUT FORMAT: JSON with panels array.
 
     def _validate_dialogue_fidelity(self, script: list, chapter_index: list, full_text: str):
         """
-        Checks if dialogue appears in source text and warns about potentially synthetic dialogue.
-        This is logging-only and doesn't block generation.
-
-        Args:
-            script: Generated script pages
-            chapter_index: Chapter map with boundaries
-            full_text: Full source text for validation
+        Checks if dialogue appears in source text.
+        Relaxed for adaptation: simply logs stats rather than warning heavily about 'synthetic' dialogue.
         """
         print("\n🔍 Validating dialogue fidelity...")
-        warnings_found = 0
+        adapted_count = 0
+        total_dialogue = 0
 
         for page in script:
-            page_num = page.get('page_number', 0)
             for panel in page.get('panels', []):
-                panel_id = panel.get('panel_id', 0)
                 dialogue = panel.get('dialogue', '')
-
-                # Skip empty dialogue
                 if not dialogue or len(dialogue.strip()) < 5:
                     continue
-
-                # Check if dialogue appears in source (allowing for minor variations)
-                # We check for at least 70% of the dialogue to appear in the source
+                
+                total_dialogue += 1
+                
+                # Check if most of the dialogue words appear in sequence in the source
                 dialogue_clean = dialogue.strip().replace('"', '').replace("'", "")
                 words = dialogue_clean.split()
-
+                
                 if len(words) < 3:
-                    continue  # Too short to validate meaningfully
+                    continue
 
-                # Check if most of the dialogue words appear in sequence in the source
-                found_in_source = False
-                search_phrase = ' '.join(words[:min(8, len(words))])  # First 8 words
+                search_phrase = ' '.join(words[:min(8, len(words))])
+                if search_phrase.lower() not in full_text.lower():
+                    adapted_count += 1
 
-                if search_phrase.lower() in full_text.lower():
-                    found_in_source = True
-
-                if not found_in_source:
-                    warnings_found += 1
-                    truncated = dialogue[:60] + "..." if len(dialogue) > 60 else dialogue
-                    print(f"  ⚠️  Page {page_num}, Panel {panel_id}: Dialogue may be synthetic: '{truncated}'")
-
-        if warnings_found == 0:
-            print("  ✅ All dialogue appears to match source text")
-        else:
-            print(f"  ⚠️  Found {warnings_found} potential synthetic dialogue instances")
-            print("  💡 Tip: Review these panels to ensure they preserve author's voice")
+        print(f"  ℹ️  Dialogue Stats: {adapted_count}/{total_dialogue} lines appear to be adapted/distilled.")
+        print("  (This is expected for a graphic novel adaptation).")
 
 if __name__ == "__main__":
     agent = ScriptingAgent("assets/input/20-thousand-leagues-under-the-sea.txt")
