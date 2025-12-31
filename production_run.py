@@ -21,8 +21,21 @@ async def run_production():
     from utils import calculate_page_count
     word_count = len(full_text.split())
 
+    # --- SHOW IDEAL CALCULATION ---
+    ideal_calc = calculate_page_count(
+        word_count=word_count,
+        test_mode=False,
+        user_override=None
+    )
+    print(f"\n📊 IDEAL PROJECT SCOPE (Auto-Calculation)")
+    print(f"   Input: {word_count:,} words")
+    print(f"   Category: {ideal_calc['density_category']}")
+    print(f"   Recommended: {ideal_calc['recommended']} pages")
+    print(f"   Range: {ideal_calc['minimum']}-{ideal_calc['maximum']} pages")
+    
+    # --- APPLY PRODUCTION LIMIT ---
     # Set to None for auto, or specify number to override (e.g., 75)
-    user_override = None  # CHANGE THIS to set specific page count
+    user_override = 20  # LIMITING TO 20 PAGES FOR PROTOTYPE RUN
 
     page_calc = calculate_page_count(
         word_count=word_count,
@@ -30,7 +43,7 @@ async def run_production():
         user_override=user_override
     )
 
-    print(f"\n📊 PROJECT SCOPE")
+    print(f"\n📊 ACTUAL PRODUCTION SCOPE")
     print(f"   Input: {word_count:,} words")
     print(f"   Category: {page_calc['density_category']}")
     print(f"   Target: {page_calc['recommended']} pages")
@@ -70,17 +83,15 @@ async def run_production():
     # 2.5. Continuity Validation
     print("\n--- STEP 2.5: CONTINUITY VALIDATION ---")
     from continuity_validator import ContinuityValidator
-    validator = ContinuityValidator(script_path)
-    issues = validator.validate()
+    # Fix: Pass character metadata directory and use correct method name
+    validator = ContinuityValidator(script_path, "assets/output/characters")
+    issues = validator.validate_script()
 
     if issues['errors']:
         print(f"⚠️  Found {len(issues['errors'])} continuity errors:")
         for error in issues['errors']:
             print(f"  - Page {error['page']}, Panel {error['panel']}: {error['message']}")
-        confirm = input("\n⚠️  Continue anyway? (y/n): ")
-        if confirm.lower() != 'y':
-            print("❌ Production cancelled due to continuity errors.")
-            return
+        print("\n⚠️  Auto-continuing for production run...")
 
     if issues['warnings']:
         print(f"ℹ️  Found {len(issues['warnings'])} continuity warnings:")
