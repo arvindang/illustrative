@@ -54,8 +54,52 @@ class CompositorAgent:
         chars_per_line = max(1, int(max_width / avg_char_width))
         return textwrap.fill(text, width=chars_per_line)
 
+    def draw_caption_box(self, draw, text, panel_rect, position="top-left"):
+        """Draws a rectangular caption box for narration/monologue."""
+        panel_x, panel_y, panel_w, panel_h = panel_rect
+        cleaned_text = self.clean_dialogue(text)
+        wrapped_text = self.wrap_text(cleaned_text, 500)
+        
+        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=self.font)
+        text_w = bbox[2]
+        text_h = bbox[3]
+        
+        padding = 20
+        box_w = text_w + (padding * 2)
+        box_h = text_h + (padding * 2)
+        
+        edge_margin = 30
+        
+        # Caption box positions (usually corners)
+        if position == "top-right":
+            x = panel_x + panel_w - box_w - edge_margin
+            y = panel_y + edge_margin
+        elif position == "bottom-left":
+            x = panel_x + edge_margin
+            y = panel_y + panel_h - box_h - edge_margin
+        elif position == "bottom-right":
+            x = panel_x + panel_w - box_w - edge_margin
+            y = panel_y + panel_h - box_h - edge_margin
+        else: # top-left default
+            x = panel_x + edge_margin
+            y = panel_y + edge_margin
+
+        # Draw Caption Box (Yellowish background, sharp corners)
+        box_rect = [x, y, x + box_w, y + box_h]
+        # Light yellow #FFFFE0 or similar
+        draw.rectangle(box_rect, fill="#FFFACD", outline="black", width=2)
+        
+        text_x = x + padding
+        text_y = y + padding
+        draw.multiline_text((text_x, text_y), wrapped_text, font=self.font, fill="black")
+
     def draw_speech_bubble(self, draw, text, panel_rect, position_code="top-left"):
         """Draws a rounded speech bubble with wrapped text positioned dynamically."""
+        # Check if this is actually a caption request via position code
+        if position_code == "caption-box":
+            self.draw_caption_box(draw, text, panel_rect)
+            return
+
         panel_x, panel_y, panel_w, panel_h = panel_rect
         # Clean dialogue first (remove character name prefixes)
         cleaned_text = self.clean_dialogue(text)
@@ -219,11 +263,22 @@ class CompositorAgent:
                 # Paste the panel
                 canvas.paste(panel_img, (pos_x, pos_y))
                 
-                # Draw the dialogue bubble
+                panel_rect = (pos_x, pos_y, panel_w, panel_h)
+
+                # 1. Draw Caption (if present)
+                if panel.get('caption'):
+                    # Force caption to Top-Left for now to establish scene, unless dialogue is also top-left?
+                    # Let's default caption to Top-Left.
+                    self.draw_caption_box(draw, panel['caption'], panel_rect, position="top-left")
+
+                # 2. Draw Dialogue bubble (if present)
                 if panel.get('dialogue'):
-                    # Get preferred position from JSON, default to top-left
                     pos_code = panel.get('bubble_position', 'top-left')
-                    panel_rect = (pos_x, pos_y, panel_w, panel_h)
+                    
+                    # Avoid overlap: If caption is Top-Left and Dialogue defaults to Top-Left, move Dialogue to Top-Right
+                    if panel.get('caption') and pos_code == "top-left":
+                        pos_code = "top-right" # Auto-adjust
+                        
                     self.draw_speech_bubble(draw, panel['dialogue'], panel_rect, pos_code)
                     
             except Exception as e:
