@@ -85,5 +85,6 @@ illustrate-ai/
 
 Run a quick smoke test:
 ```bash
-python smoke_test.py
+# python smoke_test.py
+./venv/bin/python3 smoke_test.py
 ```
