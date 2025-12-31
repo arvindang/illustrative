@@ -38,10 +38,8 @@ def init_session_state():
         st.session_state.step = 1
     if 'project_config' not in st.session_state:
         st.session_state.project_config = {}
-    if 'chapter_map' not in st.session_state:
-        st.session_state.chapter_map = None
-    if 'beat_sheet_data' not in st.session_state:
-        st.session_state.beat_sheet_data = None
+    if 'chapter_index' not in st.session_state:
+        st.session_state.chapter_index = None
     if 'script_data' not in st.session_state:
         st.session_state.script_data = None
     if 'characters_designed' not in st.session_state:
@@ -51,7 +49,6 @@ def init_session_state():
 
 def reset_pipeline():
     st.session_state.step = 1
-    st.session_state.beat_sheet_data = None
     st.session_state.script_data = None
     st.session_state.characters_designed = False
     st.rerun()
@@ -126,7 +123,7 @@ def main():
             
             st.success(f"File loaded: {uploaded_file.name}")
             
-            if st.button("Generate Beat Sheet ➡️"):
+            if st.button("Generate Script ➡️"):
                 st.session_state.project_config = {
                     "input_path": str(input_path),
                     "style": style,
@@ -134,111 +131,71 @@ def main():
                     "context_constraints": st.session_state.context_constraints,
                     "test_mode": test_mode
                 }
-                
+
                 # Run Architect Phase
                 scripter = ScriptingAgent(str(input_path))
-                
-                with st.spinner("🗺️ Mapping Chapters & Detecting Context ..."):
+
+                with st.spinner("🗺️ Generating Chapter Index (simplified)..."):
                     full_text = scripter.load_content(test_mode=False)
-                    
-                    # Parallelize mapping and context analysis
+
+                    # Parallelize index generation and context analysis
                     async def setup_story():
                         return await asyncio.gather(
                             scripter.generate_chapter_map(full_text),
                             scripter.analyze_global_context(full_text)
                         )
-                    
-                    chapter_map, detected_context = run_async(setup_story())
-                    
-                    st.session_state.chapter_map = chapter_map
+
+                    chapter_index, detected_context = run_async(setup_story())
+
+                    st.session_state.chapter_index = chapter_index
                     st.session_state.context_constraints = detected_context
-                    
+
                     # Update config with the detected context
                     st.session_state.project_config["context_constraints"] = detected_context
 
-                with st.spinner("🏗️ Architecting Story Arc..."):
-                    from utils import calculate_page_count
+                # Calculate page count
+                from utils import calculate_page_count
 
-                    word_count = len(full_text.split())
+                word_count = len(full_text.split())
+                page_calc = calculate_page_count(
+                    word_count=word_count,
+                    test_mode=test_mode,
+                    user_override=st.session_state.get('custom_page_count')
+                )
 
-                    # Calculate page count
-                    page_calc = calculate_page_count(
-                        word_count=word_count,
-                        test_mode=test_mode,
-                        user_override=st.session_state.get('custom_page_count')
-                    )
+                # Display chapter index summary
+                st.markdown("**📖 Chapter Index**")
+                total_words = sum(ch.get('estimated_word_count', 0) for ch in chapter_index)
+                st.write(f"**Total:** {total_words:,} words across {len(chapter_index)} chapters")
 
-                    # Display to user
-                    st.markdown("**📊 Project Scope**")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Input", f"{word_count:,} words")
-                        st.caption(f"Category: {page_calc['density_category']}")
-                    with col2:
-                        st.metric("Pages", page_calc['recommended'])
-                        st.caption(f"Range: {page_calc['minimum']}-{page_calc['maximum']}")
+                target_pages = page_calc['recommended']
+                st.info(f"📄 Target: {target_pages} pages | ⏱️ Estimated time: ~{page_calc['estimated_time_minutes']} minutes")
 
-                    st.info(f"⏱️ Estimated time: ~{page_calc['estimated_time_minutes']} minutes")
+                with st.spinner("📊 Allocating pages and generating scripts..."):
+                    # Simple page allocation
+                    page_allocations = scripter.allocate_pages_simple(chapter_index, target_pages)
 
-                    if page_calc['warning']:
-                        st.warning(page_calc['warning'])
-
-                    target_pages = page_calc['recommended']
-
-                    beat_sheet = run_async(scripter.generate_beat_sheet(
-                        full_text,
-                        chapter_map=st.session_state.chapter_map,
-                        style=style,
-                        target_page_count=target_pages
-                    ))
-
-                    st.session_state.beat_sheet_data = beat_sheet
-                    st.session_state.step = 1.5
-                    st.rerun()
-
-    # STEP 1.5: BEAT SHEET REVIEW
-    elif st.session_state.step == 1.5:
-        st.header("Step 1.5: Review Story Arc")
-        st.info("Review the page-by-page breakdown before generating the full script.")
-        
-        beat_sheet = st.session_state.beat_sheet_data
-        
-        # Simple Table/JSON View
-        for beat in beat_sheet:
-            with st.expander(f"Page {beat['page_number']}: {beat['narrative_goal']}", expanded=False):
-                st.write(f"**Visual:** {beat['key_visual']}")
-                st.write(f"**Atmosphere:** {beat['atmosphere']}")
-        
-        col1, col2 = st.columns([1, 4])
-        with col1:
-             if st.button("⬅️ Back"):
-                st.session_state.step = 1
-                st.rerun()
-        with col2:
-            if st.button("Approve & Write Full Script ➡️"):
-                config = st.session_state.project_config
-                scripter = ScriptingAgent(config['input_path'])
-                full_text = scripter.load_content(test_mode=False)
-                chapter_map = st.session_state.chapter_map
-                
-                with st.spinner("✍️ Writing Scene Scripts in parallel ..."):
-                    # Use the parallelized generate_script or gather write_page_script calls
+                    # Generate scripts for all pages IN PARALLEL
                     async def write_full_script():
                         tasks = []
-                        for beat in beat_sheet:
-                            relevant_chapters = beat.get('relevant_chapters', [])
-                            context_text = scripter.get_chapter_text(full_text, chapter_map, relevant_chapters)
+                        for page_alloc in page_allocations:
                             tasks.append(scripter.write_page_script(
-                                beat, context_text, config['style'], config['tone'], config.get('context_constraints', "")
+                                page_alloc,
+                                full_text,  # Full text passed to every page
+                                chapter_index,
+                                style,
+                                tone,
+                                st.session_state.project_config.get('context_constraints', ''),
+                                dialogue_mode='balanced'
                             ))
                         return await asyncio.gather(*tasks)
-                    
+
                     full_script = run_async(write_full_script())
                     st.session_state.script_data = full_script
-                    
-                    # Save locally as expected by next steps
-                    suffix = "_test_page.json" if config['test_mode'] else "_full_script.json"
-                    output_file = Path("assets/output") / f"{Path(config['input_path']).stem}{suffix}"
+
+                    # Save locally
+                    suffix = "_test_page.json" if test_mode else "_full_script.json"
+                    output_file = Path("assets/output") / f"{Path(input_path).stem}{suffix}"
                     with open(output_file, "w") as f:
                         json.dump(full_script, f, indent=2)
 
