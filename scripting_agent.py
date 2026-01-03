@@ -207,6 +207,8 @@ class ScriptingAgent:
         8. 'beats': A list of emotional beats. Format: {"description": "...", "emotional_shift": "from X to Y"}.
         9. 'visual_theme': A recurring visual element for this chapter (e.g., 'claustrophobic interior', 'vast cold ocean').
         10. 'dialogue_distillation': The single most important line of dialogue that must be preserved.
+        11. 'importance_score': Integer (1-10) rating the chapter's necessity for the core plot. 10 = Mandatory/Climax, 1 = Filler.
+        12. 'key_event_summary': A one-sentence summary of the crucial plot advancement in this chapter.
 
         OUTPUT FORMAT: JSON List of Objects.
         """
@@ -239,9 +241,11 @@ class ScriptingAgent:
                                 }
                             },
                             "visual_theme": {"type": "STRING"},
-                            "dialogue_distillation": {"type": "STRING"}
+                            "dialogue_distillation": {"type": "STRING"},
+                            "importance_score": {"type": "INTEGER"},
+                            "key_event_summary": {"type": "STRING"}
                         },
-                        "required": ["chapter_number", "title", "start_phrase", "end_phrase", "scene_type", "narrative_arc", "beats", "visual_theme"]
+                        "required": ["chapter_number", "title", "start_phrase", "end_phrase", "scene_type", "narrative_arc", "beats", "visual_theme", "importance_score"]
                     }
                 }
             )
@@ -313,70 +317,134 @@ class ScriptingAgent:
 
     def allocate_pages_arc_aware(self, chapter_index: list, target_page_count: int) -> list:
         """
-        Arc-aware page allocation using scene type and narrative position weights.
-        Climax chapters get more pages; setup chapters get slightly fewer.
-
-        Returns: List of page allocations with chapter assignments and PAGE GOALS.
+        Stratified Narrative Allocation:
+        Divides the book into three acts and enforces page distribution to ensure
+        the story reaches the end, even with a limited page budget.
+        
+        Selection Strategy:
+        1. Mandatory Chapters: First chapter, Last chapter, and 'Climax' tagged chapters.
+        2. Priority Scoring: Uses 'importance_score' to pick the best chapters in each act.
+        3. Gap Handling: Notes skipped chapters to generate bridge captions later.
         """
         total_chapters = len(chapter_index)
+        if total_chapters == 0:
+            return []
 
-        # Calculate weighted word counts
-        weighted_counts = []
-        for ch in chapter_index:
-            base_words = ch.get('estimated_word_count', 1000)
-            scene_weight = ARC_WEIGHTS.get(ch.get('scene_type', 'dialogue'), 1.0)
-            position_weight = get_position_weight(ch['chapter_number'], total_chapters)
-            weighted_counts.append(base_words * scene_weight * position_weight)
+        print(f"📊 Allocating {target_page_count} pages across {total_chapters} chapters using Stratified Sampling...")
 
-        total_weighted = sum(weighted_counts)
-        total_words = sum(ch.get('estimated_word_count', 1000) for ch in chapter_index)
+        # 1. Define Acts (Approximate 25% / 50% / 25% split)
+        # We can also use 'narrative_arc' tags if reliable, but position is safer fallback
+        act1_end = max(1, int(total_chapters * 0.25))
+        act2_end = max(act1_end + 1, int(total_chapters * 0.80)) # Extended middle
+        
+        acts = {
+            "Act 1 (Setup)": chapter_index[:act1_end],
+            "Act 2 (Confrontation)": chapter_index[act1_end:act2_end],
+            "Act 3 (Resolution)": chapter_index[act2_end:]
+        }
 
-        print(f"📊 Arc-Aware Page Allocation: {total_words:,} words across {total_chapters} chapters")
-        print(f"   Using scene-type and three-act position weights")
+        # 2. Assign Page Budgets (Target: ~20% / ~55% / ~25%)
+        # Ensure minimal viable storytelling
+        budget_act1 = max(1, int(target_page_count * 0.20))
+        budget_act3 = max(1, int(target_page_count * 0.25))
+        budget_act2 = max(1, target_page_count - budget_act1 - budget_act3)
 
-        # Allocate pages proportionally to weighted counts
-        page_allocations = []
-        current_page = 1
+        print(f"   Acts Budget: Act 1: {budget_act1}, Act 2: {budget_act2}, Act 3: {budget_act3}")
 
-        for i, chapter in enumerate(chapter_index):
-            chapter_share = weighted_counts[i] / total_weighted
-            chapter_pages = max(1, round(chapter_share * target_page_count))
-            position_weight = get_position_weight(chapter['chapter_number'], total_chapters)
+        selected_chapters = []
+
+        def select_best_chapters(chapters, budget, is_last_act=False):
+            if not chapters:
+                return []
             
-            arc = chapter.get('narrative_arc', 'Standard')
+            # Always prioritize high importance
+            # Default importance to 5 if missing
+            ranked = sorted(chapters, key=lambda x: x.get('importance_score', 5), reverse=True)
+            
+            # Mandatory inclusions for structural integrity
+            must_haves = []
+            
+            # If this is Act 1, include Chapter 1
+            if chapters[0]['chapter_number'] == 1:
+                must_haves.append(chapters[0])
+            
+            # If this is Last Act, include the very last chapter
+            if is_last_act:
+                 must_haves.append(chapters[-1])
 
-            for j in range(chapter_pages):
-                if current_page > target_page_count:
-                    break
-                
-                # Determine Page Goal based on position in chapter
-                if j == 0:
-                    page_goal = "Establish Scene & Atmosphere"
-                elif j == chapter_pages - 1:
-                    page_goal = "End on Cliffhanger/Hook"
-                else:
-                    page_goal = "Build Tension/Deepen Character"
+            # Dedupe must_haves from ranked
+            must_have_ids = {ch['chapter_number'] for ch in must_haves}
+            pool = [ch for ch in ranked if ch['chapter_number'] not in must_have_ids]
+            
+            # Fill remaining budget
+            needed = budget - len(must_haves)
+            picked = must_haves + pool[:max(0, needed)]
+            
+            return sorted(picked, key=lambda x: x['chapter_number'])
 
-                page_allocations.append({
-                    'page_number': current_page,
-                    'chapter_number': chapter['chapter_number'],
-                    'chapter_title': chapter['title'],
-                    'page_within_chapter': j + 1,
-                    'total_pages_in_chapter': chapter_pages,
-                    'arc_position': 'climax' if position_weight >= 1.3 else 'standard',
-                    'narrative_arc': arc,
-                    'page_goal': page_goal
-                })
-                current_page += 1
+        # Execute Selection
+        sel_act1 = select_best_chapters(acts["Act 1 (Setup)"], budget_act1)
+        sel_act2 = select_best_chapters(acts["Act 2 (Confrontation)"], budget_act2)
+        sel_act3 = select_best_chapters(acts["Act 3 (Resolution)"], budget_act3, is_last_act=True)
+        
+        all_selected = sel_act1 + sel_act2 + sel_act3
+        
+        # Sort by chapter number
+        all_selected.sort(key=lambda x: x['chapter_number'])
+        
+        # Deduplicate (in case of overlap or logic quirks)
+        unique_selected = []
+        seen_ids = set()
+        for ch in all_selected:
+            if ch['chapter_number'] not in seen_ids:
+                unique_selected.append(ch)
+                seen_ids.add(ch['chapter_number'])
+        
+        # If we are under budget (rare), fill with next highest priority chapters globally
+        if len(unique_selected) < target_page_count:
+            remaining = target_page_count - len(unique_selected)
+            print(f"   Under budget by {remaining} pages. Filling with high-priority scenes...")
+            unselected = [ch for ch in chapter_index if ch['chapter_number'] not in seen_ids]
+            unselected.sort(key=lambda x: x.get('importance_score', 5), reverse=True)
+            unique_selected.extend(unselected[:remaining])
+            unique_selected.sort(key=lambda x: x['chapter_number'])
+        
+        # If over budget (due to mandatories), trim lowest priority from Act 2
+        if len(unique_selected) > target_page_count:
+             print(f"   Over budget. Trimming...")
+             # Keep first and last always
+             core = [unique_selected[0], unique_selected[-1]]
+             middle = unique_selected[1:-1]
+             middle.sort(key=lambda x: x.get('importance_score', 5), reverse=True)
+             keep_middle = middle[:target_page_count-2]
+             unique_selected = [core[0]] + sorted(keep_middle, key=lambda x: x['chapter_number']) + [core[1]]
 
-            if current_page > target_page_count:
-                break
+        # Generate final allocation list with Gap detection
+        final_allocations = []
+        last_chapter_num = 0
+        
+        for i, chapter in enumerate(unique_selected):
+            # Detect Gap
+            gap_summary = ""
+            if last_chapter_num != 0 and chapter['chapter_number'] > last_chapter_num + 1:
+                gap_size = chapter['chapter_number'] - last_chapter_num - 1
+                gap_summary = f"TIME JUMP: {gap_size} chapters skipped. Summarize events between Ch {last_chapter_num} and {chapter['chapter_number']} in a caption."
+            
+            final_allocations.append({
+                'page_number': i + 1,
+                'chapter_number': chapter['chapter_number'],
+                'chapter_title': chapter['title'],
+                'page_within_chapter': 1, # Simplified: 1 page per chapter for this condensed mode
+                'total_pages_in_chapter': 1,
+                'arc_position': 'climax' if i > len(unique_selected) * 0.8 else 'standard',
+                'narrative_arc': chapter.get('narrative_arc', 'Standard'),
+                'page_goal': f"Focus on: {chapter.get('key_event_summary', 'Plot progression')}",
+                'narrative_bridge': gap_summary
+            })
+            last_chapter_num = chapter['chapter_number']
 
-        # Trim to exact target (in case rounding gave us extra)
-        page_allocations = page_allocations[:target_page_count]
-
-        print(f"✅ Allocated {len(page_allocations)} pages across {total_chapters} chapters")
-        return page_allocations
+        print(f"✅ Allocated {len(final_allocations)} pages covering Ch {unique_selected[0]['chapter_number']} to Ch {unique_selected[-1]['chapter_number']}")
+        return final_allocations
 
 
     @retry_with_backoff()
@@ -454,6 +522,15 @@ Scene momentum: {previous_context.scene_momentum}
 
 CRITICAL: Maintain visual and narrative continuity with the above.
 """
+            # Handle Narrative Bridges (Time Jumps)
+            bridge_instruction = ""
+            if page_allocation.get('narrative_bridge'):
+                bridge_instruction = f"""
+*** NARRATIVE TIME JUMP DETECTED ***
+{page_allocation['narrative_bridge']}
+INSTRUCTION: You MUST include a caption in the first panel that bridges this gap (e.g., "Weeks later...", "After leaving the coral reefs...").
+Summarize the missing action briefly to reorient the reader.
+"""
 
             prompt = f"""
 Act as an Award-Winning Graphic Novel Scriptwriter.
@@ -470,6 +547,7 @@ STORYTELLING PRINCIPLES:
 
 CONTINUITY & ARC:
 {continuity_context}
+{bridge_instruction}
 Chapter Arc: {page_allocation.get('narrative_arc', 'Standard')}
 Page Goal: {page_allocation.get('page_goal', 'Move story forward')}
 Visual Theme: {chapter.get('visual_theme', 'Standard')}
