@@ -25,6 +25,7 @@ class PipelineConfig:
     scripting_model_global_context: str = "gemini-2.5-flash"
     scripting_model_chapter_map: str = "gemini-2.5-flash"
     scripting_model_page_script: str = "gemini-2.5-flash"
+    layout_model: str = "gemini-2.5-flash"
 
     # Image Models (priority order for fallback)
     image_model_primary: str = "nano-banana-pro-preview"

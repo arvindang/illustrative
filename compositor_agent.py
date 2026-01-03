@@ -4,6 +4,8 @@ import re
 import textwrap
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from google import genai
+from google.genai import types
 from exporter_agent import ExporterAgent
 from config import config
 
@@ -142,6 +144,117 @@ class CompositorAgent:
         text_y = y + padding
         draw.multiline_text((text_x, text_y), wrapped_text, font=self.font, fill="black")
 
+    def generate_smart_layout(self, panels: list) -> list:
+        """
+        Uses Gemini to generate a dynamic, narrative-aware layout.
+        Returns a list of tuples: [(rel_x, rel_y, w, h), ...] relative to the margin area.
+        """
+        if not config.gemini_api_key:
+            print("⚠️ No API key found. Falling back to grid layout.")
+            return self.calculate_layout(len(panels))
+
+        print(f"🧠 Generating smart layout for {len(panels)} panels...")
+        
+        # Prepare context for the LLM
+        panel_context = []
+        for p in panels:
+            desc = p.get('visual_description', '')
+            diag = p.get('dialogue', '')
+            panel_context.append(f"Panel {p['panel_id']}: {desc} | Dialogue length: {len(diag)}")
+        
+        context_str = "\n".join(panel_context)
+
+        prompt = f"""
+        Act as an expert Comic Book Layout Artist.
+        Design a page layout for the following {len(panels)} panels.
+        
+        STORY CONTEXT:
+        {context_str}
+
+        REQUIREMENTS:
+        1. Emphasize important panels (e.g., action, detailed settings) by making them larger.
+        2. Ensure the reading flow is clear (Left->Right, Top->Bottom).
+        3. Output a JSON list of bounding boxes.
+        4. Coordinates must be normalized (0.0 to 1.0).
+        5. No gaps between panels (except implicit gutter handled by renderer).
+        6. Total width and height must sum to 1.0 (covering the page).
+
+        OUTPUT FORMAT:
+        JSON:
+        [
+          {{"panel_id": 1, "x": 0.0, "y": 0.0, "width": 1.0, "height": 0.3}},
+          ...
+        ]
+        """
+        
+        try:
+            client = genai.Client(api_key=config.gemini_api_key)
+            response = client.models.generate_content(
+                model=config.layout_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "panel_id": {"type": "INTEGER"},
+                                "x": {"type": "NUMBER"},
+                                "y": {"type": "NUMBER"},
+                                "width": {"type": "NUMBER"},
+                                "height": {"type": "NUMBER"}
+                            },
+                            "required": ["panel_id", "x", "y", "width", "height"]
+                        }
+                    }
+                )
+            )
+            
+            layout_data = response.parsed
+            
+            # Convert normalized coordinates to pixel dimensions
+            W = self.page_width - (2 * self.margin)
+            H = self.page_height - (2 * self.margin)
+            g = self.gutter
+            
+            final_layout = []
+            # We need to sort by panel_id to ensure order matches the input list
+            # Usually input is panel 1..N. Logic assumes input list is sorted by ID.
+            layout_map = {item['panel_id']: item for item in layout_data}
+            
+            for p in panels:
+                p_id = p['panel_id']
+                if p_id not in layout_map:
+                    print(f"⚠️ Layout missing panel {p_id}, falling back.")
+                    return self.calculate_layout(len(panels))
+                
+                item = layout_map[p_id]
+                
+                # Scale
+                px_x = int(item['x'] * W)
+                px_y = int(item['y'] * H)
+                px_w = int(item['width'] * W)
+                px_h = int(item['height'] * H)
+                
+                # Apply Gutter (shrink from right/bottom)
+                # This is a simple approximation. 
+                # A robust system would calculate exact edges.
+                # We'll just shrink width/height by gutter size unless it hits the edge.
+                
+                if px_x + px_w < W - 5: # If not touching right edge
+                    px_w -= g
+                if px_y + px_h < H - 5: # If not touching bottom edge
+                    px_h -= g
+                
+                final_layout.append((px_x, px_y, px_w, px_h))
+                
+            return final_layout
+            
+        except Exception as e:
+            print(f"⚠️ Smart Layout failed: {e}. Falling back to grid.")
+            return self.calculate_layout(len(panels))
+
     def calculate_layout(self, num_panels):
         """
         Calculates panel coordinates (x, y, w, h) for 1-6 panels
@@ -231,7 +344,13 @@ class CompositorAgent:
         draw = ImageDraw.Draw(canvas)
         
         # Get dynamic layout coordinates
-        layout = self.calculate_layout(num_panels)
+        # Try smart layout first
+        layout = self.generate_smart_layout(panels_list)
+        
+        # Fallback safety (if smart layout returned fewer items or failed silently to standard list)
+        if len(layout) < num_panels:
+             print("⚠️ Layout mismatch, using standard grid.")
+             layout = self.calculate_layout(num_panels)
         
         for idx, panel in enumerate(panels_list):
             if idx >= len(layout):
