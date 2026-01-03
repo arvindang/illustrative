@@ -557,7 +557,8 @@ PANEL COMPOSITION GUIDANCE:
 - Panel 1: Must establish the "Where" and "Who" if the scene changed.
 - Last Panel: Must be a "Hook."
 - ACTION scenes: Use 2-3 large dynamic panels
-- DIALOGUE scenes: Use 4-6 panels for conversation flow
+- DIALOGUE scenes: Use 3-5 panels for conversation flow
+- MAXIMUM 5 PANELS PER PAGE.
 
 OUTPUT REQUIREMENTS:
 - 'visual_description': Focus on cinematic lighting, character expression, and 'Mise-en-scène'.
