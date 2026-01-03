@@ -184,7 +184,6 @@ def main():
                                 full_text,  # Full text passed to every page
                                 chapter_index,
                                 style,
-                                tone,
                                 st.session_state.project_config.get('context_constraints', ''),
                                 dialogue_mode='balanced'
                             ))

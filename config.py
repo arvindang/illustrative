@@ -5,6 +5,10 @@ All model settings, rate limits, and paths are defined here.
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Ensure environment variables are loaded before PipelineConfig is instantiated
+load_dotenv()
 
 
 @dataclass
@@ -18,13 +22,14 @@ class PipelineConfig:
 
     # ==================== Model Selection ====================
     # Text/Logic Models
-    scripting_model_global_context: str = "gemini-2.5-pro"
-    scripting_model_chapter_map: str = "gemini-3-flash-preview"
-    scripting_model_page_script: str = "gemini-2.5-pro"
+    scripting_model_global_context: str = "gemini-2.5-flash"
+    scripting_model_chapter_map: str = "gemini-2.5-flash"
+    scripting_model_page_script: str = "gemini-2.5-flash"
 
-    # Image Models
-    image_model_primary: str = "gemini-3-pro-image-preview"
-    image_model_fallback: str = "gemini-2.5-flash-image"
+    # Image Models (priority order for fallback)
+    image_model_primary: str = "nano-banana-pro-preview"
+    image_model_fallback: str = "gemini-3-pro-image-preview"
+    image_model_last_resort: str = "gemini-2.5-flash-image"
 
     # Character Design Models
     character_model_attributes: str = "gemini-3-flash-preview"
