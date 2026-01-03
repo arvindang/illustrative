@@ -5,6 +5,10 @@ import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
+
+# Load .env BEFORE importing config (which reads env vars at import time)
+load_dotenv()
+
 from google import genai
 from google.genai import types
 from utils import retry_with_backoff, RateLimiter
@@ -104,8 +108,6 @@ def extract_context_from_page(page: dict, previous_context: PageContext) -> Page
         current_emotional_beat=previous_context.current_emotional_beat, # Persist for now
         visual_motifs=visual_motifs
     )
-
-load_dotenv()
 
 client = genai.Client(api_key=config.gemini_api_key)
 # Using a semaphore to throttle the scribe phase
@@ -384,7 +386,6 @@ class ScriptingAgent:
         full_text: str,         # FULL book text
         chapter_index: list,    # Minimal structural index
         style: str,
-        tone: str,
         context_constraints: str = "",
         dialogue_mode: str = "balanced",
         previous_context: PageContext = None  # Rolling context from previous page
@@ -545,7 +546,7 @@ OUTPUT FORMAT: JSON with panels array.
             
             raise last_error
 
-    async def generate_script(self, style: str, tone: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
+    async def generate_script(self, style: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
         """
         Main orchestration method: Generates complete script using simplified pipeline.
         """
@@ -604,7 +605,6 @@ OUTPUT FORMAT: JSON with panels array.
                 full_text,
                 chapter_index,
                 style,
-                tone,
                 context_constraints,
                 dialogue_mode='balanced',
                 previous_context=rolling_context
@@ -657,5 +657,5 @@ OUTPUT FORMAT: JSON with panels array.
 
 if __name__ == "__main__":
     agent = ScriptingAgent("assets/input/20-thousand-leagues-under-the-sea.txt")
-    asyncio.run(agent.generate_script(style="Watercolor", tone="Melancholic", test_mode=True))
+    asyncio.run(agent.generate_script(style="Watercolor", test_mode=True))
 

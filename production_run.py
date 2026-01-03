@@ -11,8 +11,8 @@ async def run_production():
     print("🚀 Starting Production Run...")
 
     input_file = "assets/input/20-thousand-leagues-under-the-sea.txt"
-    style = "Art Nouveau"  # Try: "Manga/Anime", "Chiaroscuro", "Vintage Pulp", etc.
-    tone = "Romantic"  # Try: "Philosophical", "Cosmic Horror", "Gothic", etc.
+    style = "Lush Watercolor"  # Try: "Manga/Anime", "Chiaroscuro", "Vintage Pulp", etc.
+    tone = "Philosophical"  # Try: "Philosophical", "Cosmic Horror", "Gothic", etc.
 
     # Auto-calculate page count
     scripter = ScriptingAgent(input_file)
@@ -67,7 +67,6 @@ async def run_production():
 
     script = await scripter.generate_script(
         style=style,
-        tone=tone,
         test_mode=False,
         context_constraints=context_constraints,
         target_page_override=page_calc['recommended']

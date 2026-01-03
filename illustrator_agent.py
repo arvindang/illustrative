@@ -5,12 +5,12 @@ import io
 from pathlib import Path
 from PIL import Image
 from dotenv import load_dotenv
+load_dotenv()
+
 from google import genai
 from google.genai import types
 from utils import retry_with_backoff, RateLimiter, ProductionManifest
 from config import config
-
-load_dotenv()
 
 # Initialize Gemini Client
 client = genai.Client(api_key=config.gemini_api_key)
@@ -187,18 +187,33 @@ class IllustratorAgent:
             if chars_included:
                 print(f"   (Including references for: {', '.join(chars_included)})")
 
-            # 3. Call the API with Fallback Logic
-            try:
-                response = await self._call_generate_content(self.current_model, input_contents)
-            except Exception as e:
-                # Check for 429 Resource Exhausted (specifically daily limit)
-                error_msg = str(e).lower()
-                if "429" in error_msg and self.current_model != config.image_model_fallback:
-                    print(f"⚠️ Primary model {self.current_model} exhausted quota. Falling back to {config.image_model_fallback}...")
-                    self.current_model = config.image_model_fallback
-                    response = await self._call_generate_content(self.current_model, input_contents)
-                else:
-                    raise e
+            # 3. Call the API with Three-Tier Fallback Logic
+            models_to_try = [
+                config.image_model_primary,
+                config.image_model_fallback,
+                config.image_model_last_resort
+            ]
+
+            response = None
+            last_error = None
+
+            for model in models_to_try:
+                try:
+                    self.current_model = model
+                    response = await self._call_generate_content(model, input_contents)
+                    break  # Success, exit the loop
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    # Check for 429 Resource Exhausted or model not found
+                    if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
+                        print(f"⚠️ Model {model} unavailable/exhausted. Trying next fallback...")
+                        continue
+                    else:
+                        raise e  # Re-raise non-fallback errors
+
+            if response is None:
+                raise last_error or Exception("All image models failed")
 
             # 4. Save the output
             page_dir = self.output_base_dir / f"page_{page_num}"

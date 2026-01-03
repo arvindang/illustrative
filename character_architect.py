@@ -3,12 +3,12 @@ import json
 import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
+load_dotenv()
+
 from google import genai
 from google.genai import types
 from utils import retry_with_backoff, RateLimiter, ProductionManifest
 from config import config
-
-load_dotenv()
 
 client = genai.Client(api_key=config.gemini_api_key)
 char_limiter = RateLimiter(rpm_limit=config.character_rpm)
@@ -134,19 +134,43 @@ class CharacterArchitect:
             char_attributes = attr_resp.parsed
             description = char_attributes['description']
             
-            # Step 2: Generate the Reference Images (Character Sheet)
+            # Step 2: Generate the Reference Images (Character Sheet) with Three-Tier Fallback
             print(f"📸 Generating reference images for {canonical_name}...")
 
             img_prompt = f"Character sheet for {canonical_name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
-            
-            response = await client.aio.models.generate_content(
-                model=config.character_model_image,
-                contents=img_prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                    image_config=types.ImageConfig(aspect_ratio="1:1")
-                )
-            )
+
+            # Three-tier fallback for image generation
+            models_to_try = [
+                config.image_model_primary,
+                config.image_model_fallback,
+                config.image_model_last_resort
+            ]
+
+            response = None
+            last_error = None
+
+            for model in models_to_try:
+                try:
+                    response = await client.aio.models.generate_content(
+                        model=model,
+                        contents=img_prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=["IMAGE"],
+                            image_config=types.ImageConfig(aspect_ratio="1:1")
+                        )
+                    )
+                    break  # Success
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
+                        print(f"⚠️ Model {model} unavailable/exhausted for character. Trying next...")
+                        continue
+                    else:
+                        raise e
+
+            if response is None:
+                raise last_error or Exception("All image models failed for character design")
 
             # Step 3: Save the assets
             char_folder = self.output_dir / folder_name
