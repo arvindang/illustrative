@@ -18,6 +18,9 @@ class CharacterArchitect:
         self.script_path = Path(script_path)
         self.output_dir = config.characters_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.objects_dir = config.objects_dir
+        self.objects_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize Manifest
         manifest_path = self.output_dir.parent / "production_manifest.json"
@@ -82,6 +85,155 @@ class CharacterArchitect:
                     canonical_chars.append(canonical)
 
             return canonical_chars
+
+    @retry_with_backoff()
+    async def identify_key_objects(self):
+        """
+        Analyzes the script to identify key recurring objects, vehicles, or locations 
+        that require consistent visual representation (e.g., The Nautilus, A specific weapon).
+        """
+        print("🔍 Scanning script for key recurring objects...")
+        with open(self.script_path, "r") as f:
+            script_data = json.load(f)
+
+        # Create a condensed version of the script for analysis
+        script_text = ""
+        for page in script_data:
+            for panel in page['panels']:
+                script_text += f"{panel['visual_description']} {panel.get('advice', {}).get('character_gear', '')}\n"
+
+        prompt = """
+        Analyze the following graphic novel script segments.
+        Identify the top 3-5 most important RECURRING OBJECTS, VEHICLES, or LOCATIONS that need a consistent visual design.
+        
+        Criteria:
+        1. It must appear multiple times or be central to the plot.
+        2. It must be a specific object/place (e.g., "The Nautilus", "Nemo's Organ", "The Diving Suit"), not generic (e.g., "a chair").
+        
+        OUTPUT: JSON list of strings. Example: ["The Nautilus", "Underwater Rifle", "Grand Salon"]
+        """
+
+        response = await client.aio.models.generate_content(
+            model=config.scripting_model_global_context, # Use a text model
+            contents=[prompt, script_text[:50000]], # Cap text to avoid context limits
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema={
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"}
+                }
+            )
+        )
+        
+        objects = response.parsed
+        print(f"   found: {objects}")
+        return objects
+
+    @retry_with_backoff()
+    async def design_object(self, object_name: str, style: str):
+        """
+        Generates a visual profile and reference sheet for a key object.
+        """
+        safe_name = object_name.lower().replace(" ", "_")
+        obj_folder = self.objects_dir / safe_name
+        
+        if obj_folder.exists() and (obj_folder / "metadata.json").exists():
+            print(f"⏭️  Skipping {object_name} (Already designed)")
+            with open(obj_folder / "metadata.json", "r") as f:
+                return json.load(f)
+
+        async with char_limiter: # Reuse the limiter or create a new one
+            print(f"⚙️  Designing asset: {object_name}...")
+            obj_folder.mkdir(parents=True, exist_ok=True)
+
+            # Step 1: Generate Visual Specs
+            spec_prompt = f"""
+            Create a detailed visual technical specification for '{object_name}' in a '{style}' graphic novel.
+            
+            Provide:
+            1. Visual Description (materials, textures, colors).
+            2. Key Features (identifying shapes, mechanisms, or architectural details).
+            3. Mood/Vibe (e.g., "ominous", "sleek", "decayed").
+
+            Keep it visual.
+            """
+
+            spec_resp = await client.aio.models.generate_content(
+                model=config.character_model_attributes,
+                contents=spec_prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "OBJECT",
+                        "properties": {
+                            "visual_description": {"type": "STRING"},
+                            "key_features": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "mood": {"type": "STRING"}
+                        },
+                        "required": ["visual_description", "key_features"]
+                    }
+                )
+            )
+            specs = spec_resp.parsed
+
+            # Step 2: Generate Reference Images (Object Sheet)
+            print(f"📸 Generating reference images for {object_name}...")
+            img_prompt = f"""
+            Concept art sheet for {object_name}. {specs['visual_description']}. 
+            Show: 1. Full view. 2. Detail close-up. 3. Alternate angle.
+            Style: {style}. White background. Clean lines.
+            """
+
+            # Fallback logic (reusing same patterns as character)
+            models_to_try = [
+                config.image_model_primary,
+                config.image_model_fallback,
+                config.image_model_last_resort
+            ]
+
+            response = None
+            last_error = None
+
+            for model in models_to_try:
+                try:
+                    response = await client.aio.models.generate_content(
+                        model=model,
+                        contents=img_prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=["IMAGE"],
+                            image_config=types.ImageConfig(aspect_ratio="1:1")
+                        )
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    continue
+
+            if response is None:
+                raise last_error or Exception("All image models failed for object design")
+
+            # Step 3: Save Assets
+            paths = []
+            for i, part in enumerate(response.parts):
+                if part.inline_data:
+                    img = part.as_image()
+                    path = obj_folder / f"ref_{i}.png"
+                    img.save(path)
+                    paths.append(str(path))
+
+            metadata = {
+                "name": object_name,
+                "description": specs['visual_description'],
+                "key_features": specs['key_features'],
+                "type": "object",
+                "reference_images": paths
+            }
+            
+            with open(obj_folder / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            print(f"✅ {object_name} designed! Assets saved in: {obj_folder}")
+            return metadata
 
     @retry_with_backoff()
     async def design_character(self, char_name: str, style: str):
@@ -200,12 +352,22 @@ class CharacterArchitect:
             print(f"✅ {canonical_name} designed! Assets saved in: {char_folder}")
             return metadata
 
-    async def design_all_characters(self, style: str):
-        """Extracts and designs all characters in the script concurrently."""
+    async def design_all_assets(self, style: str):
+        """Extracts and designs all characters AND key objects in the script."""
+        
+        # 1. Characters
         chars = self.get_main_characters()
-        print(f"👥 Designing {len(chars)} characters in parallel...")
-        tasks = [self.design_character(char, style) for char in chars]
-        return await asyncio.gather(*tasks)
+        print(f"👥 Found {len(chars)} characters. Designing...")
+        char_tasks = [self.design_character(char, style) for char in chars]
+        
+        # 2. Objects
+        objects = await self.identify_key_objects()
+        print(f"🛠️ Found {len(objects)} key objects. Designing...")
+        obj_tasks = [self.design_object(obj, style) for obj in objects]
+
+        # Run all concurrently
+        all_tasks = char_tasks + obj_tasks
+        return await asyncio.gather(*all_tasks)
 
 if __name__ == "__main__":
     import asyncio
@@ -213,6 +375,6 @@ if __name__ == "__main__":
     architect = CharacterArchitect("assets/output/20-thousand-leagues-under-the-sea_test_page.json")
     
     async def run():
-        await architect.design_all_characters(style="Lush Watercolor")
+        await architect.design_all_assets(style="Lush Watercolor")
             
     asyncio.run(run())

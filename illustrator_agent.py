@@ -23,6 +23,7 @@ class IllustratorAgent:
         self.script_path = Path(script_path)
         self.style_prompt = style_prompt
         self.char_base_dir = Path("assets/output/characters")
+        self.obj_base_dir = config.objects_dir
         self.output_base_dir = Path("assets/output/pages")
         self.output_base_dir.mkdir(parents=True, exist_ok=True)
         
@@ -33,6 +34,14 @@ class IllustratorAgent:
         # In-memory cache for lazy-loaded PIL reference images
         self._character_cache = {}
         self._metadata_cache = {}
+        self._object_cache = {}
+        self._object_metadata_cache = {}
+        
+        # Pre-load list of known objects for scanning
+        self.known_objects = []
+        if self.obj_base_dir.exists():
+            self.known_objects = [d.name for d in self.obj_base_dir.iterdir() if d.is_dir()]
+
         self.current_model = config.image_model_primary
 
     def load_character_refs(self, char_name: str):
@@ -86,6 +95,38 @@ class IllustratorAgent:
 
         if ref_images:
             print(f"  📂 Lazy-loaded {len(ref_images)} refs for {char_name}")
+
+        return ref_images, meta
+
+    def load_object_refs(self, obj_name: str):
+        """
+        Lazy-loads object reference images on-demand.
+        """
+        # Check cache
+        if obj_name in self._object_cache:
+            return self._object_cache[obj_name], self._object_metadata_cache[obj_name]
+
+        obj_folder = self.obj_base_dir / obj_name
+        metadata_path = obj_folder / "metadata.json"
+
+        if not metadata_path.exists():
+            return [], {}
+
+        with open(metadata_path, "r") as f:
+            meta = json.load(f)
+
+        ref_images = []
+        for img_path_str in meta.get('reference_images', []):
+            img_path = Path(img_path_str)
+            if img_path.exists():
+                ref_images.append(Image.open(img_path))
+
+        # Cache
+        self._object_cache[obj_name] = ref_images
+        self._object_metadata_cache[obj_name] = meta
+        
+        if ref_images:
+            print(f"  📂 Lazy-loaded {len(ref_images)} refs for Object: {meta.get('name', obj_name)}")
 
         return ref_images, meta
 
@@ -165,6 +206,8 @@ class IllustratorAgent:
 
             chars_included = []
             char_descriptions = []
+            
+            # A. Process Characters
             for char_name in present_chars:
                 # Lazy-load character refs on-demand
                 ref_images, metadata = self.load_character_refs(char_name)
@@ -178,14 +221,36 @@ class IllustratorAgent:
                     if desc:
                         char_descriptions.append(f"CHARACTER {char_name}: {desc}")
             
+            # B. Process Objects (Keyword Search)
+            objects_included = []
+            vis_desc_lower = panel_data['visual_description'].lower()
+            
+            for obj_dir_name in self.known_objects:
+                # Check if the object name (or a clean version of it) is in the description
+                # Note: directory names are "the_nautilus", but we want to match "nautilus" or "The Nautilus"
+                clean_name = obj_dir_name.replace("_", " ")
+                
+                # Simple loose matching
+                if clean_name in vis_desc_lower or obj_dir_name in vis_desc_lower:
+                    ref_images, metadata = self.load_object_refs(obj_dir_name)
+                    if ref_images:
+                        input_contents.extend(ref_images)
+                        objects_included.append(metadata.get('name', clean_name))
+                        
+                        desc = metadata.get('description', "")
+                        if desc:
+                            char_descriptions.append(f"OBJECT {metadata.get('name')}: {desc}")
+
             if char_descriptions:
                 desc_block = "\n".join(char_descriptions)
-                master_prompt += f"\n\nCHARACTER DESCRIPTIONS:\n{desc_block}"
+                master_prompt += f"\n\nVISUAL REFERENCES:\n{desc_block}"
                 # Re-update the first part of input_contents which is the prompt
                 input_contents[0] = master_prompt
             
             if chars_included:
-                print(f"   (Including references for: {', '.join(chars_included)})")
+                print(f"   (Including refs for Chars: {', '.join(chars_included)})")
+            if objects_included:
+                print(f"   (Including refs for Objects: {', '.join(objects_included)})")
 
             # 3. Call the API with Three-Tier Fallback Logic
             models_to_try = [
