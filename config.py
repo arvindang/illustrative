@@ -59,6 +59,7 @@ class PipelineConfig:
     output_dir: Path = Path("assets/output")
     input_dir: Path = Path("assets/input")
     characters_dir: Path = Path("assets/output/characters")
+    objects_dir: Path = Path("assets/output/objects")
     pages_dir: Path = Path("assets/output/pages")
     final_pages_dir: Path = Path("assets/output/final_pages")
 
@@ -87,7 +88,7 @@ class PipelineConfig:
             return False
 
         # Ensure output directories exist
-        for directory in [config.output_dir, config.characters_dir,
+        for directory in [config.output_dir, config.characters_dir, config.objects_dir,
                          config.pages_dir, config.final_pages_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
