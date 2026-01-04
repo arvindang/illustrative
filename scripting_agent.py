@@ -214,6 +214,17 @@ class ScriptingAgent:
             )
         )
 
+        # Validate parsed responses - .parsed returns None if JSON parsing failed
+        if char_response.parsed is None:
+            raw_text = char_response.text[:500] if char_response.text else 'empty'
+            print(f"⚠️ Character response failed to parse. Raw text: {raw_text}")
+            raise ValueError("Failed to parse character manifest from API response")
+
+        if obj_response.parsed is None:
+            raw_text = obj_response.text[:500] if obj_response.text else 'empty'
+            print(f"⚠️ Object response failed to parse. Raw text: {raw_text}")
+            raise ValueError("Failed to parse object manifest from API response")
+
         manifest = {
             "characters": char_response.parsed,
             "objects": obj_response.parsed

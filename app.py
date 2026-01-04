@@ -10,7 +10,7 @@ from utils import calculate_page_count
 from config import config
 
 # Page Configuration
-st.set_page_config(page_title="LegendLens AI", page_icon="📚", layout="centered")
+st.set_page_config(page_title="Illustrative AI", page_icon="📚", layout="centered")
 
 
 def init_session_state():
@@ -43,7 +43,7 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
     input_stem = Path(input_path).stem
 
     # Step 1: Scripting
-    status.write("--- STEP 1/3: SCRIPTING ---")
+    status.write("--- STEP 1/4: SCRIPTING ---")
     status.write("📚 Loading manuscript...")
 
     scripter = ScriptingAgent(input_path)
@@ -63,7 +63,7 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
 
     # Step 2: Illustration
     status.write("")
-    status.write("--- STEP 2/3: ILLUSTRATION ---")
+    status.write("--- STEP 2/4: ILLUSTRATION ---")
 
     style_prompt = f"{style} style, {tone} tone, high-quality graphic novel art."
     illustrator = IllustratorAgent(str(script_path), style_prompt)
@@ -78,7 +78,7 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
 
     # Step 3: Composition
     status.write("")
-    status.write("--- STEP 3/3: COMPOSITION ---")
+    status.write("--- STEP 3/4: COMPOSITION ---")
     status.write("📐 Assembling final pages...")
 
     compositor = CompositorAgent(str(script_path))
@@ -86,12 +86,28 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
 
     status.write("✅ Composition complete!")
 
-    # Store output paths for download
+    # Step 4: Export
+    status.write("")
+    status.write("--- STEP 4/4: EXPORT ---")
+
     output_base = Path("assets/output") / input_stem
+    title = input_stem.replace("-", " ").replace("_", " ").title()
+
+    status.write("📄 Generating PDF...")
+    pdf_path = compositor.export_pdf(output_base)
+
+    status.write("📚 Generating EPUB...")
+    epub_path = compositor.export_epub(output_base, title=title)
+
+    status.write("✅ Export complete!")
+
+    # Store output paths for download
     st.session_state.output_paths = {
         'script_path': str(script_path),
         'output_base': str(output_base),
-        'input_stem': input_stem
+        'input_stem': input_stem,
+        'pdf_path': str(pdf_path) if pdf_path else None,
+        'epub_path': str(epub_path) if epub_path else None
     }
 
     return True
@@ -100,19 +116,33 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
 def main():
     init_session_state()
 
-    st.title("📚 LegendLens: Graphic Novel Engine")
+    st.title("📚 Illustrative AI: Graphic Novel Engine")
     st.caption("Transform public domain literature into graphic novels using AI")
 
     # --- API Key Input ---
     st.subheader("1. API Key")
+
+    with st.expander("How to get a Gemini API key", expanded=False):
+        st.markdown("""
+        **Getting your key:**
+        1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
+        2. Sign in with your Google account
+        3. Click **"Create API Key"**
+        4. Copy the key and paste it below
+
+        **Pricing:** The Gemini API has a free tier with generous limits.
+        For heavy usage, you may need to enable billing in Google Cloud Console.
+        """)
+
     api_key = st.text_input(
         "Gemini API Key",
         type="password",
         value=st.session_state.api_key,
-        help="Get your key at makersuite.google.com/app/apikey",
-        placeholder="Enter your Gemini API key..."
+        placeholder="Paste your API key here..."
     )
     st.session_state.api_key = api_key
+
+    st.caption("🔒 Your API key is **never stored**. It's held only in your browser session, sent directly to Google's API, and discarded when you close this tab.")
 
     # --- File Upload ---
     st.subheader("2. Upload Manuscript")
@@ -220,44 +250,37 @@ def main():
         st.success("Your graphic novel is ready!")
 
         output_info = st.session_state.output_paths
-        script_path = output_info.get('script_path', '')
-        output_base = Path(output_info.get('output_base', ''))
         input_stem = output_info.get('input_stem', 'novel')
+        pdf_path = output_info.get('pdf_path')
+        epub_path = output_info.get('epub_path')
 
-        # Initialize compositor for export
-        if script_path and Path(script_path).exists():
-            compositor = CompositorAgent(script_path)
+        col1, col2 = st.columns(2)
 
-            col1, col2 = st.columns(2)
+        with col1:
+            if pdf_path and Path(pdf_path).exists():
+                with open(pdf_path, "rb") as f:
+                    st.download_button(
+                        label="📄 Download PDF",
+                        data=f.read(),
+                        file_name=f"{input_stem}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+            else:
+                st.warning("PDF not available")
 
-            with col1:
-                if st.button("📄 Generate & Download PDF", use_container_width=True):
-                    with st.spinner("Creating PDF..."):
-                        pdf_path = compositor.export_pdf(output_base)
-                        if pdf_path and pdf_path.exists():
-                            with open(pdf_path, "rb") as f:
-                                st.download_button(
-                                    label="⬇️ Download PDF",
-                                    data=f.read(),
-                                    file_name=f"{input_stem}.pdf",
-                                    mime="application/pdf",
-                                    use_container_width=True
-                                )
-
-            with col2:
-                if st.button("📚 Generate & Download EPUB", use_container_width=True):
-                    with st.spinner("Creating EPUB..."):
-                        title = input_stem.replace("-", " ").replace("_", " ").title()
-                        epub_path = compositor.export_epub(output_base, title=title)
-                        if epub_path and epub_path.exists():
-                            with open(epub_path, "rb") as f:
-                                st.download_button(
-                                    label="⬇️ Download EPUB",
-                                    data=f.read(),
-                                    file_name=f"{input_stem}.epub",
-                                    mime="application/epub+zip",
-                                    use_container_width=True
-                                )
+        with col2:
+            if epub_path and Path(epub_path).exists():
+                with open(epub_path, "rb") as f:
+                    st.download_button(
+                        label="📚 Download EPUB",
+                        data=f.read(),
+                        file_name=f"{input_stem}.epub",
+                        mime="application/epub+zip",
+                        use_container_width=True
+                    )
+            else:
+                st.warning("EPUB not available")
 
         st.divider()
         if st.button("🔄 Start New Project", use_container_width=True):

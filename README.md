@@ -86,5 +86,10 @@ illustrate-ai/
 Run a quick smoke test:
 ```bash
 # python smoke_test.py
-ls -l venv/bin/python && pwd && ./venv/bin/python smoke_test.py
+```
+
+### Local
+Run Streamlit and VENV
+```
+source venv/bin/activate && streamlit run app.py
 ```
