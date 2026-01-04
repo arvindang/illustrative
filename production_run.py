@@ -35,7 +35,7 @@ async def run_production():
     
     # --- APPLY PRODUCTION LIMIT ---
     # Set to None for auto, or specify number to override (e.g., 75)
-    user_override = 20  # LIMITING TO 20 PAGES FOR PROTOTYPE RUN
+    user_override = 10  # LIMITING TO 10 PAGES FOR PROTOTYPE RUN
 
     page_calc = calculate_page_count(
         word_count=word_count,
@@ -75,9 +75,9 @@ async def run_production():
     script_path = "assets/output/20-thousand-leagues-under-the-sea_full_script.json"
     
     # 2. Character Design
-    print("\n--- STEP 2: CHARACTER DESIGN ---")
+    print("\n--- STEP 2: ASSET DESIGN (Characters & Objects) ---")
     architect = CharacterArchitect(script_path)
-    await architect.design_all_characters(style=style)
+    await architect.design_all_assets(style=style)
 
     # 2.5. Continuity Validation
     print("\n--- STEP 2.5: CONTINUITY VALIDATION ---")

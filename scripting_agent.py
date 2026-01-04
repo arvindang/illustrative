@@ -736,5 +736,10 @@ OUTPUT FORMAT: JSON with panels array.
 
 if __name__ == "__main__":
     agent = ScriptingAgent("assets/input/20-thousand-leagues-under-the-sea.txt")
-    asyncio.run(agent.generate_script(style="Watercolor", test_mode=True))
+    # Generating a condensed 10-page version of the entire story
+    asyncio.run(agent.generate_script(
+        style="Lush Watercolor", 
+        test_mode=False, 
+        target_page_override=10
+    ))
 

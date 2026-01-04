@@ -356,7 +356,7 @@ class IllustratorAgent:
 if __name__ == "__main__":
     # Configuration
     # Point to your generated script JSON
-    SCRIPT_FILE = "assets/output/20-thousand-leagues-under-the-sea_test_page.json"
+    SCRIPT_FILE = "assets/output/20-thousand-leagues-under-the-sea_full_script.json"
     
     # Define the overarching style. This should match what you used in the Scripting Agent.
     # Be Descriptive! This is appended to every single panel prompt.
