@@ -371,8 +371,8 @@ class CharacterArchitect:
 
 if __name__ == "__main__":
     import asyncio
-    # Point this to the script we generated in the previous step
-    architect = CharacterArchitect("assets/output/20-thousand-leagues-under-the-sea_test_page.json")
+    # Point this to the full script we just generated
+    architect = CharacterArchitect("assets/output/20-thousand-leagues-under-the-sea_full_script.json")
     
     async def run():
         await architect.design_all_assets(style="Lush Watercolor")

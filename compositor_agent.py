@@ -423,7 +423,7 @@ class CompositorAgent:
         exporter.export_epub(title=self.script_path.stem.replace("-", " ").title())
 
 if __name__ == "__main__":
-    script_path = "assets/output/20-thousand-leagues-under-the-sea_test_page.json"
+    script_path = "assets/output/20-thousand-leagues-under-the-sea_full_script.json"
     print(f"📖 Loading script: {script_path}")
 
     compositor = CompositorAgent(script_path)
