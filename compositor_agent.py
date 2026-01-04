@@ -643,18 +643,21 @@ class CompositorAgent:
 
                 # 1. Draw Caption (if present)
                 if panel.get('caption'):
-                    # Force caption to Top-Left for now to establish scene, unless dialogue is also top-left?
-                    # Let's default caption to Top-Left.
                     self.draw_caption_box(draw, panel['caption'], panel_rect, position="top-left")
 
                 # 2. Draw Dialogue bubble (if present)
                 if panel.get('dialogue'):
                     pos_code = panel.get('bubble_position', 'top-left')
-                    
-                    # Avoid overlap: If caption is Top-Left and Dialogue defaults to Top-Left, move Dialogue to Top-Right
-                    if panel.get('caption') and pos_code == "top-left":
-                        pos_code = "top-right" # Auto-adjust
-                        
+
+                    # Avoid overlap: If caption exists at top-left, move dialogue to bottom row
+                    if panel.get('caption'):
+                        # Map top positions to bottom equivalents
+                        top_to_bottom = {
+                            "top-left": "bottom-right",
+                            "top-right": "bottom-right",
+                        }
+                        pos_code = top_to_bottom.get(pos_code, pos_code)
+
                     self.draw_speech_bubble(draw, panel['dialogue'], panel_rect, pos_code)
                     
             except Exception as e:
