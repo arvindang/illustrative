@@ -12,8 +12,17 @@ from google.genai import types
 from utils import retry_with_backoff, RateLimiter, ProductionManifest
 from config import config
 
-# Initialize Gemini Client
-client = genai.Client(api_key=config.gemini_api_key)
+# Lazy client initialization for runtime API key support
+_client = None
+_client_key = None
+
+def get_client():
+    """Returns a Gemini client, creating a new one if API key has changed."""
+    global _client, _client_key
+    if _client is None or _client_key != config.gemini_api_key:
+        _client = genai.Client(api_key=config.gemini_api_key)
+        _client_key = config.gemini_api_key
+    return _client
 
 # Image generation often has tighter RPM limits (e.g. 5-10 RPM)
 image_limiter = RateLimiter(rpm_limit=config.image_rpm)
@@ -23,20 +32,22 @@ class IllustratorAgent:
         self.script_path = Path(script_path)
         self.style_prompt = style_prompt
         self.char_base_dir = Path("assets/output/characters")
+        self.char_base_dir.mkdir(parents=True, exist_ok=True)
         self.obj_base_dir = config.objects_dir
+        self.obj_base_dir.mkdir(parents=True, exist_ok=True)
         self.output_base_dir = Path("assets/output/pages")
         self.output_base_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize Manifest
         manifest_path = self.output_base_dir.parent / "production_manifest.json"
         self.manifest = ProductionManifest(manifest_path)
-        
+
         # In-memory cache for lazy-loaded PIL reference images
         self._character_cache = {}
         self._metadata_cache = {}
         self._object_cache = {}
         self._object_metadata_cache = {}
-        
+
         # Pre-load list of known objects for scanning
         self.known_objects = []
         if self.obj_base_dir.exists():
@@ -47,6 +58,9 @@ class IllustratorAgent:
         self._build_character_map()
 
         self.current_model = config.image_model_primary
+
+        # Rate limiter for reference image generation
+        self.ref_limiter = RateLimiter(rpm_limit=config.character_rpm)
 
     def _build_character_map(self):
         """
@@ -88,6 +102,197 @@ class IllustratorAgent:
                             self.character_map[last_name] = char_folder
             except Exception as e:
                 print(f"⚠️ Error reading metadata for {char_folder}: {e}")
+
+    @retry_with_backoff()
+    async def generate_character_reference(self, char_data: dict, style: str):
+        """
+        Generates reference images for a character from the asset manifest.
+        """
+        name = char_data.get('name', 'Unknown')
+        folder_name = name.lower().replace(" ", "_")
+        char_folder = self.char_base_dir / folder_name
+
+        # Check if already designed
+        if self.manifest.is_character_designed(name):
+            print(f"⏭️  Skipping {name} (Already designed)")
+            return
+
+        async with self.ref_limiter:
+            print(f"🎨 Generating reference sheet for: {name}...")
+            char_folder.mkdir(parents=True, exist_ok=True)
+
+            description = char_data.get('description', '')
+            img_prompt = f"Character sheet for {name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
+
+            # Three-tier fallback
+            models_to_try = [
+                config.image_model_primary,
+                config.image_model_fallback,
+                config.image_model_last_resort
+            ]
+
+            response = None
+            last_error = None
+
+            for model in models_to_try:
+                try:
+                    response = await get_client().aio.models.generate_content(
+                        model=model,
+                        contents=img_prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=["IMAGE"],
+                            image_config=types.ImageConfig(aspect_ratio="1:1")
+                        )
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
+                        print(f"⚠️ Model {model} unavailable. Trying next...")
+                        continue
+                    else:
+                        raise e
+
+            if response is None:
+                raise last_error or Exception(f"All image models failed for {name}")
+
+            # Save images
+            paths = []
+            for i, part in enumerate(response.parts):
+                if part.inline_data:
+                    img = part.as_image()
+                    path = char_folder / f"ref_{i}.png"
+                    img.save(path)
+                    paths.append(str(path))
+
+            # Save metadata
+            metadata = {
+                "name": name,
+                "description": description,
+                "age_range": char_data.get('age_range', 'unknown'),
+                "occupation": char_data.get('occupation', 'unknown'),
+                "distinctive_items": char_data.get('distinctive_items', []),
+                "reference_images": paths
+            }
+            with open(char_folder / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            self.manifest.mark_character_designed(name)
+            print(f"✅ {name} designed! Assets saved in: {char_folder}")
+
+    @retry_with_backoff()
+    async def generate_object_reference(self, obj_data: dict, style: str):
+        """
+        Generates reference images for a key object from the asset manifest.
+        """
+        name = obj_data.get('name', 'Unknown')
+        folder_name = name.lower().replace(" ", "_")
+        obj_folder = self.obj_base_dir / folder_name
+
+        # Check if already designed
+        if (obj_folder / "metadata.json").exists():
+            print(f"⏭️  Skipping {name} (Already designed)")
+            return
+
+        async with self.ref_limiter:
+            print(f"⚙️ Generating reference sheet for: {name}...")
+            obj_folder.mkdir(parents=True, exist_ok=True)
+
+            description = obj_data.get('description', '')
+            key_features = obj_data.get('key_features', [])
+            features_str = ", ".join(key_features) if key_features else ""
+
+            img_prompt = f"Concept art sheet for {name}. {description}. {features_str}. Show: 1. Full view. 2. Detail close-up. 3. Alternate angle. Style: {style}. White background. Clean lines."
+
+            # Three-tier fallback
+            models_to_try = [
+                config.image_model_primary,
+                config.image_model_fallback,
+                config.image_model_last_resort
+            ]
+
+            response = None
+            last_error = None
+
+            for model in models_to_try:
+                try:
+                    response = await get_client().aio.models.generate_content(
+                        model=model,
+                        contents=img_prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=["IMAGE"],
+                            image_config=types.ImageConfig(aspect_ratio="1:1")
+                        )
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
+                        print(f"⚠️ Model {model} unavailable. Trying next...")
+                        continue
+                    else:
+                        raise e
+
+            if response is None:
+                raise last_error or Exception(f"All image models failed for {name}")
+
+            # Save images
+            paths = []
+            for i, part in enumerate(response.parts):
+                if part.inline_data:
+                    img = part.as_image()
+                    path = obj_folder / f"ref_{i}.png"
+                    img.save(path)
+                    paths.append(str(path))
+
+            # Save metadata
+            metadata = {
+                "name": name,
+                "description": description,
+                "key_features": key_features,
+                "type": "object",
+                "reference_images": paths
+            }
+            with open(obj_folder / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            print(f"✅ {name} designed! Assets saved in: {obj_folder}")
+
+    async def generate_all_references(self, style: str):
+        """
+        Generates reference images for all characters and objects in the asset manifest.
+        This should be called before panel generation.
+        """
+        # Load asset manifest
+        manifest_path = self.script_path.parent / f"{self.script_path.stem.replace('_full_script', '').replace('_test_page', '')}_assets.json"
+
+        if not manifest_path.exists():
+            print(f"⚠️ Asset manifest not found at {manifest_path}. Skipping reference generation.")
+            return
+
+        with open(manifest_path, "r") as f:
+            asset_manifest = json.load(f)
+
+        characters = asset_manifest.get('characters', [])
+        objects = asset_manifest.get('objects', [])
+
+        print(f"\n🎨 Generating reference sheets for {len(characters)} characters and {len(objects)} objects...")
+
+        # Generate character references
+        char_tasks = [self.generate_character_reference(char, style) for char in characters]
+        await asyncio.gather(*char_tasks)
+
+        # Generate object references
+        obj_tasks = [self.generate_object_reference(obj, style) for obj in objects]
+        await asyncio.gather(*obj_tasks)
+
+        # Rebuild character map after generating new references
+        self._build_character_map()
+        self.known_objects = [d.name for d in self.obj_base_dir.iterdir() if d.is_dir()]
+
+        print("✅ All reference sheets generated!")
 
     def load_character_refs(self, char_name: str):
         """
@@ -183,7 +388,7 @@ class IllustratorAgent:
 
     async def _call_generate_content(self, model_name: str, input_contents: list):
         """Helper to call the API with a specific model."""
-        return await client.aio.models.generate_content(
+        return await get_client().aio.models.generate_content(
             model=model_name,
             contents=input_contents,
             config=types.GenerateContentConfig(

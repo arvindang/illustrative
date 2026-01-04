@@ -8,14 +8,33 @@ Illustrative is an AI-powered graphic novel engine that transforms public domain
 
 ## Core Architecture
 
-The application follows a multi-agent pipeline architecture with sequential processing stages:
+The application follows a streamlined **3-agent pipeline**:
 
-1. **ScriptingAgent** (`scripting_agent.py`): Analyzes source text, extracts global context (era, technology level, visual constraints), generates chapter maps, creates beat sheets, and produces structured JSON scripts with panel-by-panel breakdowns
-2. **CharacterArchitect** (`character_architect.py`): Extracts unique characters from the script, normalizes character names to handle variants (e.g., "Captain Nemo" and "Nemo"), generates visual descriptions and reference images with character consistency tags
-3. **IllustratorAgent** (`illustrator_agent.py`): Generates individual panel images using character references for consistency, manages compositional negative space for text bubbles, implements fallback logic between image models
-4. **ContinuityValidator** (`continuity_validator.py`): Tracks character states across panels (props, clothing, positions), detects impossible scenarios and continuity errors
-5. **CompositorAgent** (`compositor_agent.py`): Assembles panels into pages using a 2x2 grid layout, overlays speech bubbles with wrapped text using PIL
-6. **ExporterAgent** (`exporter_agent.py`): Exports final pages to PDF/EPUB format
+```
+ScriptingAgent → IllustratorAgent → CompositorAgent
+   (script +       (refs + panels)    (compose + export)
+    assets)
+```
+
+### 1. ScriptingAgent (`scripting_agent.py`)
+Uses Gemini Context Caching to load the full book, then runs a multi-pass process:
+- **Pass 1 - Director**: Creates a page-by-page blueprint with summaries, mood, and focus text
+- **Pass 1.5 - Asset Manifest**: Extracts characters and key objects with visual descriptions
+- **Pass 2 - Scriptwriter**: Generates detailed panel scripts in parallel, referencing the cached book
+
+Output: `_full_script.json` + `_assets.json`
+
+### 2. IllustratorAgent (`illustrator_agent.py`)
+Handles all image generation:
+- **Reference Sheets**: Generates character and object reference images from the asset manifest
+- **Panel Images**: Generates individual panel images using references for consistency
+- Implements 3-tier fallback logic between image models
+
+### 3. CompositorAgent (`compositor_agent.py`)
+Handles final assembly and export:
+- **Batch Layout**: Generates layouts for all pages in a single API call
+- **Composition**: Assembles panels into pages with dynamic layouts, overlays speech bubbles and captions
+- **Export**: Outputs to PDF/EPUB
 
 ## Key Technical Patterns
 
