@@ -2,11 +2,14 @@ import os
 import json
 import re
 import textwrap
+import uuid
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from google import genai
 from google.genai import types
-from exporter_agent import ExporterAgent
+from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.lib.pagesizes import letter
+from ebooklib import epub
 from config import config
 
 class CompositorAgent:
@@ -22,6 +25,9 @@ class CompositorAgent:
         self.margin = config.page_margin
         self.gutter = config.panel_gutter
 
+        # Cache for batched layouts (page_number -> layout list)
+        self._layout_cache = {}
+
         # Load a font (Ensure you have a .ttf file in a 'fonts' folder)
         # Fallback to a basic system font if not found
         try:
@@ -32,46 +38,195 @@ class CompositorAgent:
 
     def clean_dialogue(self, text: str) -> str:
         """
-        Remove character name prefixes like 'Nemo:' or 'Narrator:' from dialogue.
-        This prevents bubbles showing "Nemo: I shall not..." instead of just "I shall not..."
+        Remove character name prefixes AND stage directions from dialogue.
+        This prevents bubbles showing "Nemo: I shall not..." or "(SFX): CLANG!"
 
         Args:
-            text: Raw dialogue text that may contain character name prefixes
+            text: Raw dialogue text that may contain character name prefixes or stage directions
 
         Returns:
-            Cleaned dialogue text without name prefixes
+            Cleaned dialogue text without name prefixes or stage directions
         """
         if not text:
             return text
 
+        cleaned = text.strip()
+
         # Remove patterns like "Name:" or "Name (aside):" at the start of dialogue
         # Matches: "Captain Nemo:", "Professor:", "Nemo (whispers):", etc.
-        cleaned = re.sub(r'^[A-Z][a-z\s]*(\([^)]+\))?:\s*', '', text.strip())
-        return cleaned.strip()
+        cleaned = re.sub(r'^[A-Z][a-zA-Z\s]+(\([^)]+\))?:\s*', '', cleaned)
 
-    def wrap_text(self, text, max_width):
-        """Wraps text to fit within a specified width."""
-        # Estimate characters per line based on font size (rough approximation)
-        avg_char_width = 25 
-        chars_per_line = max(1, int(max_width / avg_char_width))
-        return textwrap.fill(text, width=chars_per_line)
+        # Strip stage directions anywhere in text
+        cleaned = re.sub(r'\(SFX\):\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\(Internal Monologue\):\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\(aside\):\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\(thought bubble\):\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\(whispers?\):\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\(narration\):\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\(voice[- ]?over\):\s*', '', cleaned, flags=re.IGNORECASE)
+
+        # Remove leading/trailing quotes and whitespace
+        return cleaned.strip().strip('"').strip()
+
+    def wrap_text(self, text: str, max_width: int, font=None) -> str:
+        """
+        Wraps text to fit within a specified pixel width using actual font measurements.
+
+        Args:
+            text: The text to wrap
+            max_width: Maximum width in pixels
+            font: Font to use for measurement (defaults to self.font)
+
+        Returns:
+            Text with newlines inserted at appropriate positions
+        """
+        if not text:
+            return ""
+
+        if font is None:
+            font = self.font
+
+        words = text.split()
+        if not words:
+            return ""
+
+        lines = []
+        current_line = []
+
+        # Create temporary image for measurement
+        temp_img = Image.new('RGB', (1, 1))
+        draw = ImageDraw.Draw(temp_img)
+
+        for word in words:
+            test_line = ' '.join(current_line + [word])
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            width = bbox[2] - bbox[0]
+
+            if width <= max_width:
+                current_line.append(word)
+            else:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                current_line = [word]
+
+        if current_line:
+            lines.append(' '.join(current_line))
+
+        return '\n'.join(lines)
+
+    def _fit_text_to_bubble(self, text: str, max_width: int, max_height: int, padding: int = 30) -> tuple:
+        """
+        Fits text to bubble by reducing font size or truncating if needed.
+
+        Args:
+            text: The cleaned text to fit
+            max_width: Maximum bubble width in pixels
+            max_height: Maximum bubble height in pixels
+            padding: Padding inside bubble
+
+        Returns:
+            Tuple of (wrapped_text, font_to_use, actual_font_size)
+        """
+        available_width = max_width - (padding * 2)
+        available_height = max_height - (padding * 2)
+
+        font_size = config.font_size
+        min_font_size = 28  # Don't go smaller than this
+
+        temp_img = Image.new('RGB', (1, 1))
+        draw = ImageDraw.Draw(temp_img)
+
+        while font_size >= min_font_size:
+            try:
+                test_font = ImageFont.truetype(config.font_path, font_size)
+            except:
+                test_font = self.font
+
+            wrapped = self.wrap_text(text, available_width, font=test_font)
+
+            # Measure height
+            bbox = draw.multiline_textbbox((0, 0), wrapped, font=test_font)
+            height = bbox[3] - bbox[1]
+
+            if height <= available_height:
+                return wrapped, test_font, font_size
+
+            font_size -= 4  # Reduce font size
+
+        # Still too long - truncate with ellipsis at minimum font size
+        try:
+            final_font = ImageFont.truetype(config.font_path, min_font_size)
+        except:
+            final_font = self.font
+
+        truncated = self._truncate_with_ellipsis(text, available_width, available_height, final_font)
+        return truncated, final_font, min_font_size
+
+    def _truncate_with_ellipsis(self, text: str, max_width: int, max_height: int, font) -> str:
+        """
+        Truncates text to fit within bounds, adding ellipsis.
+
+        Args:
+            text: Text to truncate
+            max_width: Maximum width in pixels
+            max_height: Maximum height in pixels
+            font: Font to use for measurement
+
+        Returns:
+            Truncated text with ellipsis if needed
+        """
+        temp_img = Image.new('RGB', (1, 1))
+        draw = ImageDraw.Draw(temp_img)
+
+        words = text.split()
+        result_words = []
+
+        for word in words:
+            test_text = ' '.join(result_words + [word])
+            wrapped = self.wrap_text(test_text + '...', max_width, font=font)
+
+            bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
+            height = bbox[3] - bbox[1]
+
+            if height > max_height:
+                # Adding this word would overflow
+                break
+
+            result_words.append(word)
+
+        if len(result_words) < len(words):
+            # Text was truncated
+            return self.wrap_text(' '.join(result_words) + '...', max_width, font=font)
+        else:
+            return self.wrap_text(text, max_width, font=font)
 
     def draw_caption_box(self, draw, text, panel_rect, position="top-left"):
-        """Draws a rectangular caption box for narration/monologue."""
+        """Draws a rectangular caption box for narration/monologue with overflow handling."""
         panel_x, panel_y, panel_w, panel_h = panel_rect
         cleaned_text = self.clean_dialogue(text)
-        wrapped_text = self.wrap_text(cleaned_text, 500)
-        
-        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=self.font)
-        text_w = bbox[2]
-        text_h = bbox[3]
-        
+
+        if not cleaned_text:
+            return
+
         padding = 20
+        edge_margin = 30
+
+        # Max bubble size: 60% of panel width, 40% of panel height
+        max_box_w = int(panel_w * 0.6)
+        max_box_h = int(panel_h * 0.4)
+
+        # Fit text with overflow handling
+        wrapped_text, font_to_use, _ = self._fit_text_to_bubble(
+            cleaned_text, max_box_w, max_box_h, padding=padding
+        )
+
+        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font_to_use)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+
         box_w = text_w + (padding * 2)
         box_h = text_h + (padding * 2)
-        
-        edge_margin = 30
-        
+
         # Caption box positions (usually corners)
         if position == "top-right":
             x = panel_x + panel_w - box_w - edge_margin
@@ -82,46 +237,53 @@ class CompositorAgent:
         elif position == "bottom-right":
             x = panel_x + panel_w - box_w - edge_margin
             y = panel_y + panel_h - box_h - edge_margin
-        else: # top-left default
+        else:  # top-left default
             x = panel_x + edge_margin
             y = panel_y + edge_margin
 
         # Draw Caption Box (Yellowish background, sharp corners)
         box_rect = [x, y, x + box_w, y + box_h]
-        # Light yellow #FFFFE0 or similar
         draw.rectangle(box_rect, fill="#FFFACD", outline="black", width=2)
-        
+
         text_x = x + padding
         text_y = y + padding
-        draw.multiline_text((text_x, text_y), wrapped_text, font=self.font, fill="black")
+        draw.multiline_text((text_x, text_y), wrapped_text, font=font_to_use, fill="black")
 
     def draw_speech_bubble(self, draw, text, panel_rect, position_code="top-left"):
-        """Draws a rounded speech bubble with wrapped text positioned dynamically."""
+        """Draws a rounded speech bubble with wrapped text and overflow handling."""
         # Check if this is actually a caption request via position code
         if position_code == "caption-box":
             self.draw_caption_box(draw, text, panel_rect)
             return
 
         panel_x, panel_y, panel_w, panel_h = panel_rect
-        # Clean dialogue first (remove character name prefixes)
+        # Clean dialogue first (remove character name prefixes and stage directions)
         cleaned_text = self.clean_dialogue(text)
-        wrapped_text = self.wrap_text(cleaned_text, 500)
-        
-        # Calculate text size
-        # We use (0,0) to get dimensions relative to the anchor point.
-        # We rely on bbox[2] (right) and bbox[3] (bottom) to ensure we cover the full rendered area.
-        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=self.font)
-        text_w = bbox[2]
-        text_h = bbox[3]
-        
+
+        if not cleaned_text:
+            return
+
         padding = 30
+        edge_margin = 40
+
+        # Max bubble size: 55% of panel width, 45% of panel height
+        max_bubble_w = int(panel_w * 0.55)
+        max_bubble_h = int(panel_h * 0.45)
+
+        # Fit text with overflow handling (shrink font or truncate)
+        wrapped_text, font_to_use, _ = self._fit_text_to_bubble(
+            cleaned_text, max_bubble_w, max_bubble_h, padding=padding
+        )
+
+        # Calculate actual text size with the fitted font
+        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font_to_use)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+
         bubble_w = text_w + (padding * 2)
         bubble_h = text_h + (padding * 2)
-        
+
         # Determine coordinates based on position_code
-        # Default margin from panel edges
-        edge_margin = 40 
-        
         if position_code == "top-right":
             x = panel_x + panel_w - bubble_w - edge_margin
             y = panel_y + edge_margin
@@ -131,24 +293,120 @@ class CompositorAgent:
         elif position_code == "bottom-right":
             x = panel_x + panel_w - bubble_w - edge_margin
             y = panel_y + panel_h - bubble_h - edge_margin
-        else: # top-left (default)
+        else:  # top-left (default)
             x = panel_x + edge_margin
             y = panel_y + edge_margin
 
         # Draw bubble background
         bubble_rect = [x, y, x + bubble_w, y + bubble_h]
         draw.rounded_rectangle(bubble_rect, radius=15, fill="white", outline="black", width=3)
-        
-        # Draw text centered in bubble
+
+        # Draw text in bubble
         text_x = x + padding
         text_y = y + padding
-        draw.multiline_text((text_x, text_y), wrapped_text, font=self.font, fill="black")
+        draw.multiline_text((text_x, text_y), wrapped_text, font=font_to_use, fill="black")
 
-    def generate_smart_layout(self, panels: list) -> list:
+    def generate_all_layouts(self, script_data: list):
+        """
+        Batch-generates layouts for ALL pages in a single API call.
+        Stores results in self._layout_cache for use during assembly.
+        """
+        if not config.gemini_api_key:
+            print("⚠️ No API key found. Using grid layouts for all pages.")
+            return
+
+        print(f"🧠 Batch-generating layouts for {len(script_data)} pages...")
+
+        # Build context for all pages
+        all_pages_context = []
+        for page in script_data:
+            page_num = page['page_number']
+            panels = page['panels']
+            panel_summaries = []
+            for p in panels:
+                desc = p.get('visual_description', '')[:100]
+                panel_summaries.append(f"Panel {p['panel_id']}: {desc}")
+            all_pages_context.append({
+                "page_number": page_num,
+                "panel_count": len(panels),
+                "panel_summaries": panel_summaries
+            })
+
+        prompt = f"""
+        Act as an expert Comic Book Layout Artist.
+        Design layouts for {len(script_data)} pages of a graphic novel.
+
+        PAGE SUMMARIES:
+        {json.dumps(all_pages_context, indent=2)}
+
+        REQUIREMENTS:
+        1. For each page, output a layout with normalized coordinates (0.0 to 1.0).
+        2. Emphasize important panels by making them larger.
+        3. Ensure reading flow: Left->Right, Top->Bottom.
+        4. Each page's panels must cover the full page (sum to 1.0 in both dimensions).
+
+        OUTPUT FORMAT:
+        JSON object with page_number as key:
+        {{
+          "1": [{{"panel_id": 1, "x": 0.0, "y": 0.0, "width": 1.0, "height": 0.5}}, ...],
+          "2": [...],
+          ...
+        }}
+        """
+
+        try:
+            client = genai.Client(api_key=config.gemini_api_key)
+            response = client.models.generate_content(
+                model=config.layout_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
+
+            layouts_data = json.loads(response.text)
+
+            # Process and cache layouts
+            W = self.page_width - (2 * self.margin)
+            H = self.page_height - (2 * self.margin)
+            g = self.gutter
+
+            for page_num_str, page_layout in layouts_data.items():
+                page_num = int(page_num_str)
+                final_layout = []
+
+                for item in page_layout:
+                    px_x = int(item['x'] * W)
+                    px_y = int(item['y'] * H)
+                    px_w = int(item['width'] * W)
+                    px_h = int(item['height'] * H)
+
+                    # Apply gutter
+                    if px_x + px_w < W - 5:
+                        px_w -= g
+                    if px_y + px_h < H - 5:
+                        px_h -= g
+
+                    final_layout.append((px_x, px_y, px_w, px_h))
+
+                self._layout_cache[page_num] = final_layout
+
+            print(f"✅ Batched layouts generated for {len(self._layout_cache)} pages")
+
+        except Exception as e:
+            print(f"⚠️ Batch layout generation failed: {e}. Will use per-page fallback.")
+
+    def generate_smart_layout(self, panels: list, page_num: int = None) -> list:
         """
         Uses Gemini to generate a dynamic, narrative-aware layout.
         Returns a list of tuples: [(rel_x, rel_y, w, h), ...] relative to the margin area.
+
+        If page_num is provided and a cached layout exists, returns the cached version.
         """
+        # Check cache first
+        if page_num is not None and page_num in self._layout_cache:
+            return self._layout_cache[page_num]
+
         if not config.gemini_api_key:
             print("⚠️ No API key found. Falling back to grid layout.")
             return self.calculate_layout(len(panels))
@@ -343,9 +601,8 @@ class CompositorAgent:
         canvas = Image.new("RGB", (self.page_width, self.page_height), "white")
         draw = ImageDraw.Draw(canvas)
         
-        # Get dynamic layout coordinates
-        # Try smart layout first
-        layout = self.generate_smart_layout(panels_list)
+        # Get dynamic layout coordinates (uses cache if available from batch generation)
+        layout = self.generate_smart_layout(panels_list, page_num=page_num)
         
         # Fallback safety (if smart layout returned fewer items or failed silently to standard list)
         if len(layout) < num_panels:
@@ -408,19 +665,114 @@ class CompositorAgent:
         canvas.save(output_path)
         print(f"✅ Page {page_num} saved to {output_path}")
 
+    def get_sorted_images(self):
+        """Returns a list of image paths sorted by page number."""
+        images = list(self.output_dir.glob("page_*.png"))
+        images.sort(key=lambda x: int(x.stem.split("_")[1]))
+        return images
+
+    def export_pdf(self, output_path: Path):
+        """Bundles images into a PDF."""
+        images = self.get_sorted_images()
+        if not images:
+            print("⚠️ No images found to export to PDF.")
+            return None
+
+        pdf_path = output_path.with_suffix(".pdf")
+
+        with Image.open(images[0]) as first_img:
+            img_w, img_h = first_img.size
+
+        c = pdf_canvas.Canvas(str(pdf_path), pagesize=(img_w, img_h))
+
+        for img_path in images:
+            c.drawImage(str(img_path), 0, 0, width=img_w, height=img_h)
+            c.showPage()
+
+        c.save()
+        print(f"✅ PDF exported to {pdf_path}")
+        return pdf_path
+
+    def export_epub(self, output_path: Path, title="Graphic Novel", author="Illustrate AI"):
+        """Bundles images into a Fixed-Layout EPUB 3."""
+        images = self.get_sorted_images()
+        if not images:
+            print("⚠️ No images found to export to EPUB.")
+            return None
+
+        epub_path = output_path.with_suffix(".epub")
+        book = epub.EpubBook()
+
+        book.set_identifier(str(uuid.uuid4()))
+        book.set_title(title)
+        book.set_language('en')
+        book.add_author(author)
+
+        # Fixed Layout metadata (EPUB 3)
+        book.add_metadata(None, 'meta', 'pre-paginated', {'property': 'rendition:layout'})
+        book.add_metadata(None, 'meta', 'landscape', {'property': 'rendition:orientation'})
+        book.add_metadata(None, 'meta', 'auto', {'property': 'rendition:spread'})
+
+        spine = ['nav']
+        manifest = []
+
+        for i, img_path in enumerate(images):
+            page_num = i + 1
+
+            with open(img_path, 'rb') as f:
+                img_content = f.read()
+
+            epub_img = epub.EpubImage()
+            epub_img.file_name = f'images/page_{page_num}.png'
+            epub_img.content = img_content
+            book.add_item(epub_img)
+
+            html_content = f"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+                <head>
+                    <title>Page {page_num}</title>
+                    <meta name="viewport" content="width=2400, height=3200"/>
+                    <style>
+                        body {{ margin: 0; padding: 0; background-color: #FFFFFF; }}
+                        img {{ width: 100%; height: 100%; display: block; }}
+                    </style>
+                </head>
+                <body>
+                    <img src="../images/page_{page_num}.png" alt="Page {page_num}"/>
+                </body>
+            </html>
+            """
+
+            item = epub.EpubHtml(title=f'Page {page_num}', file_name=f'text/page_{page_num}.xhtml', content=html_content)
+            book.add_item(item)
+            manifest.append(item)
+            spine.append(item)
+
+        book.toc = tuple(manifest)
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        book.spine = spine
+
+        epub.write_epub(str(epub_path), book, {})
+        print(f"✅ EPUB exported to {epub_path}")
+        return epub_path
+
     def run(self):
         with open(self.script_path, "r") as f:
             script_data = json.load(f)
-            
+
+        # Batch-generate layouts for all pages in a single API call
+        self.generate_all_layouts(script_data)
+
         for page in script_data:
             self.assemble_page(page)
-        
+
         # Packaging
         print("📦 Packaging output...")
         output_base = Path("assets/output") / self.script_path.stem
-        exporter = ExporterAgent(str(self.output_dir), str(output_base))
-        exporter.export_pdf()
-        exporter.export_epub(title=self.script_path.stem.replace("-", " ").title())
+        self.export_pdf(output_base)
+        self.export_epub(output_base, title=self.script_path.stem.replace("-", " ").title())
 
 if __name__ == "__main__":
     script_path = "assets/output/20-thousand-leagues-under-the-sea_full_script.json"

@@ -1,442 +1,272 @@
 import streamlit as st
 import asyncio
-import os
-import json
 from pathlib import Path
-from dotenv import load_dotenv
 
-# Import your agents
-# from ingestion_agent import IngestionAgent # Removed: File not found and redundant
 from scripting_agent import ScriptingAgent
-from character_architect import CharacterArchitect
 from illustrator_agent import IllustratorAgent
 from compositor_agent import CompositorAgent
-from exporter_agent import ExporterAgent
-from continuity_validator import ContinuityValidator
 from constants import ART_STYLES, NARRATIVE_TONES
-
-load_dotenv()
-
-# Event Loop Management for Streamlit
-def get_event_loop():
-    """Get or create an event loop for Streamlit session"""
-    if 'event_loop' not in st.session_state:
-        st.session_state.event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(st.session_state.event_loop)
-    return st.session_state.event_loop
-
-def run_async(coro):
-    """Run an async coroutine using the session's event loop"""
-    loop = get_event_loop()
-    return loop.run_until_complete(coro)
+from utils import calculate_page_count
+from config import config
 
 # Page Configuration
-st.set_page_config(page_title="LegendLens AI", page_icon="📚", layout="wide")
+st.set_page_config(page_title="LegendLens AI", page_icon="📚", layout="centered")
+
 
 def init_session_state():
-    if 'step' not in st.session_state:
-        st.session_state.step = 1
-    if 'project_config' not in st.session_state:
-        st.session_state.project_config = {}
-    if 'chapter_index' not in st.session_state:
-        st.session_state.chapter_index = None
-    if 'script_data' not in st.session_state:
-        st.session_state.script_data = None
-    if 'characters_designed' not in st.session_state:
-        st.session_state.characters_designed = False
-    if 'context_constraints' not in st.session_state:
-        st.session_state.context_constraints = "Setting: 1860s. Use period-accurate technology (e.g. Victorian steamships, not modern aircraft carriers). Characters underwater MUST wear steampunk diving suits with copper helmets."
+    """Initialize session state variables."""
+    defaults = {
+        'api_key': '',
+        'input_path': None,
+        'word_count': 0,
+        'is_running': False,
+        'pipeline_complete': False,
+        'output_paths': {},
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
 
-def reset_pipeline():
-    st.session_state.step = 1
-    st.session_state.script_data = None
-    st.session_state.characters_designed = False
-    st.rerun()
+
+def run_async(coro):
+    """Run an async coroutine."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+async def execute_pipeline(status, input_path: str, style: str, tone: str, target_pages: int, test_mode: bool):
+    """Execute the full pipeline: Scripting -> Illustration -> Composition."""
+    input_stem = Path(input_path).stem
+
+    # Step 1: Scripting
+    status.write("--- STEP 1/3: SCRIPTING ---")
+    status.write("📚 Loading manuscript...")
+
+    scripter = ScriptingAgent(input_path)
+
+    status.write("💾 Caching book content...")
+    script = await scripter.generate_script(
+        style=f"{style}, {tone}",
+        test_mode=test_mode,
+        target_page_override=target_pages
+    )
+
+    status.write(f"✅ Script complete: {len(script)} pages generated")
+
+    # Determine script path
+    suffix = "_test_page.json" if test_mode else "_full_script.json"
+    script_path = Path("assets/output") / f"{input_stem}{suffix}"
+
+    # Step 2: Illustration
+    status.write("")
+    status.write("--- STEP 2/3: ILLUSTRATION ---")
+
+    style_prompt = f"{style} style, {tone} tone, high-quality graphic novel art."
+    illustrator = IllustratorAgent(str(script_path), style_prompt)
+
+    status.write("🎨 Generating character & object reference sheets...")
+    await illustrator.generate_all_references(style=style)
+
+    status.write("🖼️ Generating panel images...")
+    await illustrator.run_production()
+
+    status.write("✅ Illustration complete!")
+
+    # Step 3: Composition
+    status.write("")
+    status.write("--- STEP 3/3: COMPOSITION ---")
+    status.write("📐 Assembling final pages...")
+
+    compositor = CompositorAgent(str(script_path))
+    compositor.run()
+
+    status.write("✅ Composition complete!")
+
+    # Store output paths for download
+    output_base = Path("assets/output") / input_stem
+    st.session_state.output_paths = {
+        'script_path': str(script_path),
+        'output_base': str(output_base),
+        'input_stem': input_stem
+    }
+
+    return True
+
 
 def main():
     init_session_state()
-    
+
     st.title("📚 LegendLens: Graphic Novel Engine")
-    
-    # --- Sidebar Controls ---
-    with st.sidebar:
-        st.header("⚙️ Project Settings")
-        
-        # API Key Check
-        if not os.getenv("GEMINI_API_KEY"):
-            st.error("❌ GEMINI_API_KEY not found in environment!")
-            st.info("Please add it to your .env file.")
-            st.stop()
-            
-        style = st.selectbox("Art Style", ART_STYLES)
+    st.caption("Transform public domain literature into graphic novels using AI")
 
-        tone = st.selectbox("Narrative Tone", NARRATIVE_TONES)
-            
-        test_mode = st.checkbox("Test Mode (Generate 1 page/segment)", value=True)
+    # --- API Key Input ---
+    st.subheader("1. API Key")
+    api_key = st.text_input(
+        "Gemini API Key",
+        type="password",
+        value=st.session_state.api_key,
+        help="Get your key at makersuite.google.com/app/apikey",
+        placeholder="Enter your Gemini API key..."
+    )
+    st.session_state.api_key = api_key
 
-        # Advanced page count controls
-        with st.expander("📊 Page Count Settings (Optional)", expanded=False):
-            st.markdown("Auto mode calculates pages based on book length. Use Custom to set a specific count.")
+    # --- File Upload ---
+    st.subheader("2. Upload Manuscript")
+    uploaded_file = st.file_uploader(
+        "Choose a text file (.txt)",
+        type=["txt"],
+        help="Upload a public domain text file to adapt into a graphic novel"
+    )
 
-            page_mode = st.radio(
-                "Mode",
-                options=["Auto (Recommended)", "Custom"],
-                index=0,
-                horizontal=True
-            )
+    if uploaded_file:
+        # Save file to disk
+        input_path = Path("assets/input") / uploaded_file.name
+        input_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if page_mode == "Custom":
-                if test_mode:
-                    st.info("Test mode always uses 1-3 pages.")
-                else:
-                    custom_pages = st.number_input(
-                        "Pages to generate",
-                        min_value=10,
-                        max_value=200,
-                        value=100,
-                        step=5,
-                        help="Set specific page count. You'll see recommendations after uploading."
-                    )
-                    st.session_state.custom_page_count = custom_pages
+        with open(input_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        st.session_state.input_path = str(input_path)
+
+        # Calculate word count
+        content = uploaded_file.getvalue().decode('utf-8')
+        word_count = len(content.split())
+        st.session_state.word_count = word_count
+
+        st.success(f"Loaded: {uploaded_file.name} ({word_count:,} words)")
+
+        # --- Page Mode Selection ---
+        st.subheader("3. Configuration")
+
+        page_mode = st.radio(
+            "Page Count",
+            ["Quick Preview (10 pages)", "Auto (recommended)"],
+            horizontal=True,
+            help="Quick Preview is faster for testing. Auto calculates based on book length."
+        )
+
+        # Show recommendation for Auto mode
+        if page_mode.startswith("Auto"):
+            page_calc = calculate_page_count(word_count)
+            st.info(f"📄 Recommended: **{page_calc['recommended']} pages** (~{page_calc['estimated_time_minutes']} min)")
+
+        # --- Style & Tone ---
+        col1, col2 = st.columns(2)
+        with col1:
+            style = st.selectbox("Art Style", ART_STYLES, index=0)
+        with col2:
+            tone = st.selectbox("Narrative Tone", NARRATIVE_TONES, index=0)
+
+        st.divider()
+
+        # --- Generate Button ---
+        can_run = bool(api_key) and not st.session_state.is_running
+
+        if not api_key:
+            st.warning("Please enter your Gemini API key above to continue.")
+
+        if st.button(
+            "🚀 Generate Graphic Novel",
+            type="primary",
+            disabled=not can_run,
+            use_container_width=True
+        ):
+            st.session_state.is_running = True
+            st.session_state.pipeline_complete = False
+
+            # Inject API key into config for the agents
+            config.gemini_api_key = api_key
+
+            # Determine target pages
+            if page_mode.startswith("Quick"):
+                target_pages = 10
+                test_mode = True
             else:
-                st.session_state.custom_page_count = None
-
-        st.divider()
-        if st.button("🔄 Reset Project"):
-            reset_pipeline()
-            
-    # --- Main Workflow State Machine ---
-    
-    # STEP 1: UPLOAD & INGESTION
-    if st.session_state.step == 1:
-        st.header("Step 1: Upload Manuscript")
-        st.info("Upload a text file (.txt) to begin the adaptation process.")
-        
-        uploaded_file = st.file_uploader("Choose a file", type=["txt"])
-        
-        if uploaded_file:
-            # Save file
-            input_path = Path("assets/input") / uploaded_file.name
-            input_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(input_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            
-            st.success(f"File loaded: {uploaded_file.name}")
-            
-            if st.button("Generate Script ➡️"):
-                st.session_state.project_config = {
-                    "input_path": str(input_path),
-                    "style": style,
-                    "tone": tone,
-                    "context_constraints": st.session_state.context_constraints,
-                    "test_mode": test_mode
-                }
-
-                # Run Architect Phase
-                scripter = ScriptingAgent(str(input_path))
-
-                with st.spinner("🗺️ Generating Chapter Index (simplified)..."):
-                    full_text = scripter.load_content(test_mode=False)
-
-                    # Parallelize index generation and context analysis
-                    async def setup_story():
-                        return await asyncio.gather(
-                            scripter.generate_chapter_map(full_text),
-                            scripter.analyze_global_context(full_text)
-                        )
-
-                    chapter_index, detected_context = run_async(setup_story())
-
-                    st.session_state.chapter_index = chapter_index
-                    st.session_state.context_constraints = detected_context
-
-                    # Update config with the detected context
-                    st.session_state.project_config["context_constraints"] = detected_context
-
-                # Calculate page count
-                from utils import calculate_page_count
-
-                word_count = len(full_text.split())
-                page_calc = calculate_page_count(
-                    word_count=word_count,
-                    test_mode=test_mode,
-                    user_override=st.session_state.get('custom_page_count')
-                )
-
-                # Display chapter index summary
-                st.markdown("**📖 Chapter Index**")
-                total_words = sum(ch.get('estimated_word_count', 0) for ch in chapter_index)
-                st.write(f"**Total:** {total_words:,} words across {len(chapter_index)} chapters")
-
+                page_calc = calculate_page_count(word_count)
                 target_pages = page_calc['recommended']
-                st.info(f"📄 Target: {target_pages} pages | ⏱️ Estimated time: ~{page_calc['estimated_time_minutes']} minutes")
+                test_mode = False
 
-                with st.spinner("📊 Allocating pages and generating scripts..."):
-                    # Simple page allocation
-                    page_allocations = scripter.allocate_pages_simple(chapter_index, target_pages)
+            # Run pipeline
+            with st.status("🚀 Running pipeline...", expanded=True) as status:
+                try:
+                    run_async(execute_pipeline(
+                        status=status,
+                        input_path=str(input_path),
+                        style=style,
+                        tone=tone,
+                        target_pages=target_pages,
+                        test_mode=test_mode
+                    ))
 
-                    # Generate scripts for all pages IN PARALLEL
-                    async def write_full_script():
-                        tasks = []
-                        for page_alloc in page_allocations:
-                            tasks.append(scripter.write_page_script(
-                                page_alloc,
-                                full_text,  # Full text passed to every page
-                                chapter_index,
-                                style,
-                                st.session_state.project_config.get('context_constraints', ''),
-                                dialogue_mode='balanced'
-                            ))
-                        return await asyncio.gather(*tasks)
+                    status.update(label="✅ Pipeline Complete!", state="complete")
+                    st.session_state.pipeline_complete = True
 
-                    full_script = run_async(write_full_script())
-                    st.session_state.script_data = full_script
+                except Exception as e:
+                    status.update(label=f"❌ Error: {str(e)[:50]}...", state="error")
+                    st.error(f"Pipeline failed: {e}")
+                    st.info("Check your API key and try again.")
 
-                    # Save locally
-                    suffix = "_test_page.json" if test_mode else "_full_script.json"
-                    output_file = Path("assets/output") / f"{Path(input_path).stem}{suffix}"
-                    with open(output_file, "w") as f:
-                        json.dump(full_script, f, indent=2)
+                finally:
+                    st.session_state.is_running = False
 
-                    st.session_state.step = 2
-                    st.rerun()
-
-    # STEP 2: SCRIPT REVIEW
-    elif st.session_state.step == 2:
-        st.header("Step 2: Script Review")
-        
-        # Allow downloading the raw JSON
-        script_str = json.dumps(st.session_state.script_data, indent=2)
-        st.download_button("Download Script JSON", script_str, "script.json", "application/json")
-        
-        # Visualizer
-        st.subheader("Generated Scenes")
-        script_data = st.session_state.script_data
-        
-        for page in script_data:
-            with st.expander(f"Page {page['page_number']} - {page.get('layout_style', 'Standard')}", expanded=True):
-                for panel in page['panels']:
-                    cols = st.columns([1, 3])
-                    with cols[0]:
-                        st.markdown(f"**Panel {panel['panel_id']}**")
-                        st.caption(f"Chars: {', '.join(panel['characters'])}")
-                    with cols[1]:
-                        st.text_area("Visual", panel['visual_description'], height=80, key=f"p{page['page_number']}_pan{panel['panel_id']}_vis", disabled=True)
-                        st.info(f"🗣️ **Dialogue:** {panel['dialogue']}")
-        
-        col1, col2 = st.columns([1, 4])
-        with col1:
-             if st.button("⬅️ Back"):
-                st.session_state.step = 1.5 # Go back to Beat Sheet
-                st.rerun()
-        with col2:
-            if st.button("Approve Script & Analyze Characters ➡️"):
-                st.session_state.step = 3
-                st.rerun()
-
-    # STEP 3: CHARACTER DESIGN
-    elif st.session_state.step == 3:
-        st.header("Step 3: Character Design")
-        
-        config = st.session_state.project_config
-        # Determine script file path based on logic in ScriptingAgent
-        # (Re-deriving path logic here - ideally ScriptingAgent should return the path)
-        input_stem = Path(config['input_path']).stem
-        suffix = "_test_page.json" if config['test_mode'] else "_full_script.json"
-        script_path = Path("assets/output") / f"{input_stem}{suffix}"
-        
-        architect = CharacterArchitect(str(script_path))
-        chars = architect.get_main_characters()
-        
-        st.write(f"**Found {len(chars)} Main Characters:** {', '.join(chars)}")
-        
-        if not st.session_state.characters_designed:
-            if st.button("🎨 Generate Character Sheets"):
-                with st.spinner("Designing characters in parallel..."):
-                    run_async(architect.design_all_characters(config['style']))
-                st.session_state.characters_designed = True
-                st.rerun()
-        else:
-            # Display Generated Characters
-            st.subheader("Character Reference Sheets")
-            cols = st.columns(3)
-            for i, char in enumerate(chars):
-                char_dir = Path("assets/output/characters") / char.lower().replace(" ", "_")
-                # Look for ref_0.png
-                img_path = char_dir / "ref_0.png"
-                with cols[i % 3]:
-                    if img_path.exists():
-                        st.image(str(img_path), caption=char)
-                    else:
-                        st.warning(f"No image for {char}")
-            
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button("⬅️ Back to Script"):
-                    st.session_state.step = 2
-                    st.rerun()
-            with col2:
-                if st.button("Approve Characters & Validate Continuity ➡️"):
-                    st.session_state.step = 3.5
-                    st.rerun()
-
-    # STEP 3.5: CONTINUITY VALIDATION
-    elif st.session_state.step == 3.5:
-        st.header("Step 3.5: Continuity Validation")
-
-        config = st.session_state.project_config
-        input_stem = Path(config['input_path']).stem
-        suffix = "_test_page.json" if config['test_mode'] else "_full_script.json"
-        script_path = Path("assets/output") / f"{input_stem}{suffix}"
-        character_dir = Path("assets/output/characters")
-
-        st.info("Validating script for continuity issues across panels...")
-
-        if st.button("🔍 Run Continuity Validation"):
-            with st.spinner("Analyzing script for continuity issues..."):
-                validator = ContinuityValidator(
-                    script_path=str(script_path),
-                    character_metadata_dir=str(character_dir)
-                )
-
-                result = validator.validate_script()
-
-                # Display results
-                st.subheader("Validation Results")
-
-                if not result['errors'] and not result['warnings']:
-                    st.success("✅ No continuity issues detected!")
-                else:
-                    # Show errors
-                    if result['errors']:
-                        st.error(f"🚨 Found {len(result['errors'])} errors:")
-                        for error in result['errors']:
-                            with st.expander(f"Page {error['page']}, Panel {error['panel']} - {error['type']}", expanded=False):
-                                st.write(f"**Character:** {error.get('character', 'N/A')}")
-                                st.write(f"**Message:** {error['message']}")
-
-                    # Show warnings
-                    if result['warnings']:
-                        st.warning(f"⚠️ Found {len(result['warnings'])} warnings:")
-                        for warning in result['warnings']:
-                            with st.expander(f"Page {warning['page']}, Panel {warning['panel']} - {warning['type']}", expanded=False):
-                                st.write(f"**Character:** {warning.get('character', 'N/A')}")
-                                st.write(f"**Message:** {warning['message']}")
-
-                # Show report
-                st.subheader("Full Report")
-                st.text(validator.get_validation_report())
-
-                # Download option
-                report_json = json.dumps(result, indent=2)
-                st.download_button(
-                    "Download Validation Report (JSON)",
-                    report_json,
-                    "continuity_validation.json",
-                    "application/json"
-                )
-
+    # --- Download Section ---
+    if st.session_state.pipeline_complete and st.session_state.output_paths:
         st.divider()
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if st.button("⬅️ Back to Characters"):
-                st.session_state.step = 3
-                st.rerun()
-        with col2:
-            if st.button("Proceed to Production ➡️"):
-                st.session_state.step = 4
-                st.rerun()
+        st.subheader("📦 Download Your Graphic Novel")
+        st.success("Your graphic novel is ready!")
 
-    # STEP 4: ILLUSTRATION & COMPOSITION
-    elif st.session_state.step == 4:
-        st.header("Step 4: Production (Illustration & Composition)")
-        
-        config = st.session_state.project_config
-        input_stem = Path(config['input_path']).stem
-        suffix = "_test_page.json" if config['test_mode'] else "_full_script.json"
-        script_path = Path("assets/output") / f"{input_stem}{suffix}"
-        
-        st.info("This process may take some time depending on the number of panels.")
-        
-        if st.button("🚀 Launch Illustrator Engine"):
-            status_container = st.status("🎨 Illustrating Panels...", expanded=True)
-            
-            # 1. Illustration
-            style_prompt = f"{config['style']} style, {config['tone']} tone, high-quality graphic novel art."
-            illustrator = IllustratorAgent(str(script_path), style_prompt)
-            
-            # We wrap the asyncio call
-            try:
-                run_async(illustrator.run_production())
-                status_container.update(label="Illustration Complete!", state="running", expanded=False)
-                
-                # 2. Composition
-                status_container.write("📐 Assembling Final Pages...")
+        output_info = st.session_state.output_paths
+        script_path = output_info.get('script_path', '')
+        output_base = Path(output_info.get('output_base', ''))
+        input_stem = output_info.get('input_stem', 'novel')
 
-                compositor = CompositorAgent(str(script_path))
-                compositor.run()
-                
-                status_container.update(label="✅ Production Complete!", state="complete", expanded=False)
-                st.session_state.step = 5
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+        # Initialize compositor for export
+        if script_path and Path(script_path).exists():
+            compositor = CompositorAgent(script_path)
 
-    # STEP 5: FINAL PREVIEW & EXPORT
-    elif st.session_state.step == 5:
-        st.header("🎉 Final Output")
-        st.balloons()
-        
-        final_pages_dir = Path("assets/output/final_pages")
-        page_files = sorted(list(final_pages_dir.glob("page_*.png")))
-        
-        if page_files:
-            # Export Options
-            st.subheader("📦 Package & Download")
-            col_pdf, col_epub = st.columns(2)
-            
-            config = st.session_state.project_config
-            input_stem = Path(config['input_path']).stem
-            output_base = Path("assets/output") / input_stem
-            
-            exporter = ExporterAgent(str(final_pages_dir), str(output_base))
-            
-            with col_pdf:
-                if st.button("Generate PDF 📄"):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("📄 Generate & Download PDF", use_container_width=True):
                     with st.spinner("Creating PDF..."):
-                        pdf_path = exporter.export_pdf()
+                        pdf_path = compositor.export_pdf(output_base)
                         if pdf_path and pdf_path.exists():
                             with open(pdf_path, "rb") as f:
                                 st.download_button(
-                                    label="Download PDF",
-                                    data=f,
-                                    file_name=pdf_path.name,
-                                    mime="application/pdf"
+                                    label="⬇️ Download PDF",
+                                    data=f.read(),
+                                    file_name=f"{input_stem}.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True
                                 )
-            
-            with col_epub:
-                if st.button("Generate EPUB 📚"):
+
+            with col2:
+                if st.button("📚 Generate & Download EPUB", use_container_width=True):
                     with st.spinner("Creating EPUB..."):
-                        epub_path = exporter.export_epub(title=input_stem.replace("-", " ").title())
+                        title = input_stem.replace("-", " ").replace("_", " ").title()
+                        epub_path = compositor.export_epub(output_base, title=title)
                         if epub_path and epub_path.exists():
                             with open(epub_path, "rb") as f:
                                 st.download_button(
-                                    label="Download EPUB",
-                                    data=f,
-                                    file_name=epub_path.name,
-                                    mime="application/epub+zip"
+                                    label="⬇️ Download EPUB",
+                                    data=f.read(),
+                                    file_name=f"{input_stem}.epub",
+                                    mime="application/epub+zip",
+                                    use_container_width=True
                                 )
 
-            st.divider()
-            st.subheader("Page Preview")
-            for page in page_files:
-                st.image(str(page), caption=page.name, use_container_width=True)
-        else:
-            st.warning("No pages found. Something went wrong.")
-            
-        if st.button("Start New Project"):
-            reset_pipeline()
+        st.divider()
+        if st.button("🔄 Start New Project", use_container_width=True):
+            # Reset state
+            st.session_state.pipeline_complete = False
+            st.session_state.output_paths = {}
+            st.session_state.input_path = None
+            st.rerun()
+
 
 if __name__ == "__main__":
     main()
