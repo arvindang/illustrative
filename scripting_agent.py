@@ -1,12 +1,12 @@
 import os
 import json
 import asyncio
-import re
+import hashlib
 from pathlib import Path
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-# Load .env BEFORE importing config (which reads env vars at import time)
+# Load .env BEFORE importing config
 load_dotenv()
 
 from google import genai
@@ -14,732 +14,301 @@ from google.genai import types
 from utils import retry_with_backoff, RateLimiter
 from config import config
 
-
-@dataclass
-class PageContext:
-    """Rolling context passed between sequential page generations."""
-    last_panel_summary: str = ""
-    character_states: dict = field(default_factory=dict)
-    # Format: {"Captain Nemo": {"gear": ["harpoon"], "position": "bridge", "mood": "determined"}}
-    open_dialogue_threads: list = field(default_factory=list)
-    scene_momentum: str = "establishing"  # establishing | rising | climax | falling | resolution
-    # NEW: Emotional thread tracking
-    current_emotional_beat: str = "" 
-    visual_motifs: list = field(default_factory=list) # e.g., "The growing shadow", "The ticking clock"
-
-
-# Arc weights for narrative-aware page allocation
-ARC_WEIGHTS = {
-    "action": 1.3,        # Action-heavy chapters get 30% more pages
-    "dialogue": 1.0,      # Standard density
-    "contemplative": 0.8, # Reflective chapters slightly compressed
-}
-
-
-def get_position_weight(chapter_num: int, total_chapters: int) -> float:
-    """Weight chapters by narrative position (three-act structure)."""
-    position = chapter_num / total_chapters
-    if position < 0.25:      # Act 1: Setup
-        return 0.9
-    elif position < 0.75:    # Act 2: Confrontation (includes midpoint)
-        if 0.45 < position < 0.55:  # Midpoint
-            return 1.2
-        return 1.0
-    else:                    # Act 3: Resolution
-        if position > 0.85:  # Climax zone
-            return 1.4
-        return 1.1
-
-
-def extract_context_from_page(page: dict, previous_context: PageContext) -> PageContext:
-    """Extract rolling context from a completed page for the next page."""
-    panels = page.get('panels', [])
-    if not panels:
-        return previous_context
-
-    # Get the final panel
-    final_panel = panels[-1]
-
-    # Build summary of final panel
-    last_panel_summary = f"Panel {final_panel.get('panel_id')}: {final_panel.get('visual_description', '')[:150]}"
-    if final_panel.get('dialogue'):
-        last_panel_summary += f" | Dialogue: \"{final_panel.get('dialogue')[:80]}...\""
-
-    # Update character states from all panels
-    character_states = previous_context.character_states.copy()
-    visual_motifs = previous_context.visual_motifs.copy()
-    
-    for panel in panels:
-        advice = panel.get('advice', {})
-        gear_info = advice.get('character_gear', '')
-        continuity = advice.get('continuity_notes', '')
-
-        for char in panel.get('characters', []):
-            if char not in character_states:
-                character_states[char] = {"gear": [], "position": "", "mood": ""}
-            # Parse gear from advice
-            if char.lower() in gear_info.lower():
-                character_states[char]["gear_note"] = gear_info
-            if char.lower() in continuity.lower():
-                character_states[char]["continuity_note"] = continuity
-    
-    # Update visual motifs if new ones appear (simplified logic)
-    # In a real system, we'd have the LLM explicitly output active motifs
-    
-    # Detect open dialogue threads (questions, interrupted speech)
-    open_threads = []
-    for panel in panels[-2:]:  # Check last 2 panels
-        dialogue = panel.get('dialogue', '')
-        if dialogue.endswith('?') or dialogue.endswith('...') or dialogue.endswith('—'):
-            chars = panel.get('characters', [])
-            speaker = chars[0] if chars else 'Narrator'
-            open_threads.append(f"{speaker}: \"{dialogue[-60:]}\"")
-
-    # Determine scene momentum based on panel density and content
-    panel_count = len(panels)
-    has_action = any('action' in p.get('visual_description', '').lower() for p in panels)
-    momentum = "rising" if panel_count >= 4 or has_action else "establishing"
-
-    return PageContext(
-        last_panel_summary=last_panel_summary,
-        character_states=character_states,
-        open_dialogue_threads=open_threads[-3:],  # Keep last 3 threads
-        scene_momentum=momentum,
-        current_emotional_beat=previous_context.current_emotional_beat, # Persist for now
-        visual_motifs=visual_motifs
-    )
-
+# Initialize Client
 client = genai.Client(api_key=config.gemini_api_key)
-# Using a semaphore to throttle the scribe phase
-scribe_limiter = RateLimiter(rpm_limit=config.scripting_rpm)
+
+# Rate limiter for the parallel script writing phase
+# We can go higher here because we aren't generating images yet
+scribe_limiter = RateLimiter(rpm_limit=15)
 
 class ScriptingAgent:
     def __init__(self, book_path: str):
         self.book_path = Path(book_path)
         self.output_dir = config.output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-    def get_model_for_task(self, task_type: str) -> str:
-        """Select appropriate model based on task requirements."""
-        model_map = {
-            "global_context": config.scripting_model_global_context,
-            "chapter_map": config.scripting_model_chapter_map,
-            "page_script": config.scripting_model_page_script,
-        }
-        return model_map.get(task_type, config.scripting_model_page_script)
+        self.cache_name = None
 
     def load_content(self, test_mode=True):
         """
         Loads the book content. 
-        In Test Mode: Returns a 10k char slice to save tokens/time.
-        In Prod Mode: Returns the full text.
         """
         with open(self.book_path, "r", encoding="utf-8") as f:
             full_text = f.read()
             if test_mode:
-                # Take a slice from the middle
-                mid = len(full_text) // 2
-                start = max(0, mid - 5000)
-                end = min(len(full_text), mid + 5000)
-                return f"...{full_text[start:end]}..."
+                # Take a generous slice for testing
+                return full_text[:50000] 
             return full_text
+
+    async def _get_or_create_cache(self, content: str):
+        """
+        Uploads the book content to Gemini's Context Cache.
+        Returns the cache object or name to reference in subsequent calls.
+        """
+        # Create a deterministic hash for the cache name based on content
+        content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+        # Cache names must be unique to the project/content
+        # In a real app, we might check if a cache with this name already exists via list_caches()
+        # For this prototype, we'll create a new one with a TTL. 
+        
+        print(f"💾 Caching book content ({len(content)} chars) to Gemini Context Cache...")
+        
+        try:
+            # Note: The SDK for caching might vary slightly by version. 
+            # We are using the 'google.genai' library.
+            
+            # 1. Create the cache
+            # We use the 'scripting_model_global_context' as the base model for the cache
+            # or a known caching-capable model like gemini-1.5-pro-002
+            
+            # Using a distinct display name helps debugging
+            display_name = f"book_cache_{self.book_path.stem}_{content_hash[:6]}"
+            
+            cached_content = await client.aio.caches.create(
+                model=config.scripting_model_global_context,
+                config=types.CreateCachedContentConfig(
+                    display_name=display_name,
+                    contents=[content],
+                    ttl="3600s" # 1 hour TTL
+                )
+            )
+            
+            self.cache_name = cached_content.name
+            print(f"✅ Cache created: {self.cache_name} (TTL: 1h)")
+            return self.cache_name
+
+        except Exception as e:
+            print(f"⚠️ Cache creation failed: {e}")
+            print("   Falling back to sending full text in context (slower/more expensive).")
+            return None
 
     @retry_with_backoff()
     async def analyze_global_context(self, full_text: str):
         """
-        Act as a Production Designer. Analyze the text to determine the 
-        setting, era, technology level, and specific visual requirements.
+        DEPRECATED: Retained for compatibility with current production_run.py.
+        The 'Director' pass now handles this implicitly.
         """
-        context_file = self.output_dir / f"{self.book_path.stem}_context.txt"
-        if context_file.exists():
-            print("⏭️  Skipping Global Context Analysis (Already exists)")
-            with open(context_file, "r") as f:
-                return f.read().strip()
-
-        print("🔍 Analyzing Global Context & Historical Constraints...")
-        prompt = """
-        Act as a Production Designer and Historical Consultant for a Graphic Novel adaptation.
-        Analyze the provided text and extract a concise 'Production Bible' of constraints.
-        
-        Focus on:
-        1. Setting/Era (e.g., 1860s Victorian).
-        2. Technology level (e.g., Steam-powered, specific gear mentioned).
-        3. Visual Constants (e.g., "Nautilus must look like a sea monster", "Diving suits are copper").
-        4. Atmospheric details.
-
-        OUTPUT: A single string (2-4 sentences) that summarizes these constraints for a creative team.
-        """
-        
-        response = await client.aio.models.generate_content(
-            model=self.get_model_for_task("global_context"),
-            contents=[prompt, full_text[:30000]], # First 30k chars usually enough for setting
-        )
-        
-        context = response.text.strip()
-        with open(context_file, "w") as f:
-            f.write(context)
-        return context
+        print("ℹ️  (Legacy) Global Context Analysis merged into Director pass.")
+        return "Standard Graphic Novel Adaptation"
 
     @retry_with_backoff()
-    async def generate_chapter_map(self, full_text: str):
+    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str):
         """
-        Creates a high-level map of the book to help with contextual slicing.
+        PASS 1: THE DIRECTOR
+        Consumes the FULL BOOK (via cache) and outputs a page-by-page blueprint.
         """
-        chapter_map_path = self.output_dir / f"{self.book_path.stem}_chapter_map.json"
-        if chapter_map_path.exists():
-            print("⏭️  Skipping Chapter Map Generation (Already exists)")
-            with open(chapter_map_path, "r") as f:
-                return json.load(f)
-
-        print("🗺️  Generating Chapter Index with Beat Sheet...")
-        prompt = """
-        Act as a Master Storyboard Artist and Screenwriter. 
-        Analyze the provided text and create a 'Beat Sheet' for a Graphic Novel.
-
-        For each chapter, identify:
-        1. 'chapter_number': Integer.
-        2. 'title': Short descriptive title.
-        3. 'start_phrase': The first 10-15 words of the chapter (for text slicing).
-        4. 'end_phrase': The last 10-15 words of the chapter (for text slicing).
-        5. 'estimated_word_count': Approximate word count.
-        6. 'scene_type': 'action', 'dialogue', or 'contemplative'.
-        7. 'narrative_arc': (Setup, Inciting Incident, Rising Action, Climax, or Resolution).
-        8. 'beats': A list of emotional beats. Format: {"description": "...", "emotional_shift": "from X to Y"}.
-        9. 'visual_theme': A recurring visual element for this chapter (e.g., 'claustrophobic interior', 'vast cold ocean').
-        10. 'dialogue_distillation': The single most important line of dialogue that must be preserved.
-        11. 'importance_score': Integer (1-10) rating the chapter's necessity for the core plot. 10 = Mandatory/Climax, 1 = Filler.
-        12. 'key_event_summary': A one-sentence summary of the crucial plot advancement in this chapter.
-
-        OUTPUT FORMAT: JSON List of Objects.
-        """
+        print(f"🎬 DIRECTOR PASS: Creating {target_pages}-page blueprint...")
         
+        prompt = f"""
+        Act as a Master Graphic Novel Director.
+        
+        TASK:
+        Adapt the provided book into a TIGHT {target_pages}-PAGE Graphic Novel Script.
+        
+        You must output a JSON list of exactly {target_pages} items. 
+        Each item represents ONE PAGE and must define:
+        1. 'page_number': Integer (1 to {target_pages}).
+        2. 'summary': A 2-sentence summary of what happens on this page.
+        3. 'focus_text': A specific quote or 200-word excerpt from the source text that this page covers.
+        4. 'mood': The emotional tone (e.g., "Tense", "Melancholic").
+        5. 'key_characters': List of characters present.
+        6. 'visual_notes': Specific setting or lighting notes.
+
+        CRITICAL PACING RULES:
+        - Page 1 MUST introduce the setting/protagonist.
+        - Page {target_pages} MUST contain the ending or a major cliffhanger.
+        - Distribute the story arc evenly. Do not rush the ending.
+        
+        STYLE: {style}
+        
+        OUTPUT FORMAT: JSON List.
+        """
+
+        # Prepare request arguments
+        model = config.scripting_model_global_context
+        
+        if cache_name:
+            # Use cached content
+            contents = [prompt]
+            cached_content = cache_name
+        else:
+            # Fallback: Send full text (truncate if absolutely massive)
+            contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback}"]
+            cached_content = None
+
         response = await client.aio.models.generate_content(
-            model=self.get_model_for_task("chapter_map"),
-            contents=[prompt, full_text],
+            model=model,
+            contents=contents,
             config=types.GenerateContentConfig(
+                cached_content=cached_content, # Pass the cache name here
                 response_mime_type="application/json",
                 response_schema={
                     "type": "ARRAY",
                     "items": {
                         "type": "OBJECT",
                         "properties": {
-                            "chapter_number": {"type": "INTEGER"},
-                            "title": {"type": "STRING"},
-                            "start_phrase": {"type": "STRING"},
-                            "end_phrase": {"type": "STRING"},
-                            "estimated_word_count": {"type": "INTEGER"},
-                            "scene_type": {"type": "STRING", "enum": ["action", "dialogue", "contemplative"]},
-                            "narrative_arc": {"type": "STRING"},
-                            "beats": {
-                                "type": "ARRAY",
-                                "items": {
-                                    "type": "OBJECT",
-                                    "properties": {
-                                        "description": {"type": "STRING"},
-                                        "emotional_shift": {"type": "STRING"}
-                                    }
-                                }
-                            },
-                            "visual_theme": {"type": "STRING"},
-                            "dialogue_distillation": {"type": "STRING"},
-                            "importance_score": {"type": "INTEGER"},
-                            "key_event_summary": {"type": "STRING"}
+                            "page_number": {"type": "INTEGER"},
+                            "summary": {"type": "STRING"},
+                            "focus_text": {"type": "STRING"},
+                            "mood": {"type": "STRING"},
+                            "key_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "visual_notes": {"type": "STRING"}
                         },
-                        "required": ["chapter_number", "title", "start_phrase", "end_phrase", "scene_type", "narrative_arc", "beats", "visual_theme", "importance_score"]
+                        "required": ["page_number", "summary", "focus_text", "key_characters"]
                     }
                 }
             )
         )
         
-        chapter_map_path = self.output_dir / f"{self.book_path.stem}_chapter_map.json"
-        with open(chapter_map_path, "w") as f:
-            json.dump(response.parsed, f, indent=2)
-            
-        print(f"✅ Chapter Map Saved: {chapter_map_path}")
         return response.parsed
 
-    def get_chapter_text(self, full_text: str, chapter: dict, next_chapter: dict = None) -> str:
-        """
-        Extract chapter text robustly using start/end phrases or next chapter start.
-        """
-        def find_fuzzy(text, phrase, start_pos=0):
-            if not phrase:
-                return -1
-            words = phrase.strip().split()
-            if not words:
-                return -1
-            # Create pattern: word followed by one or more whitespace characters
-            pattern_str = r'\s+'.join(map(re.escape, words))
-            match = re.search(pattern_str, text[start_pos:])
-            if match:
-                return match.start() + start_pos
-            return -1
-
-        # 1. Find Start
-        start_phrase = chapter.get('start_phrase', '')
-        start_idx = find_fuzzy(full_text, start_phrase)
-        
-        if start_idx == -1:
-            # Fallback: simple string find
-            start_idx = full_text.find(start_phrase)
-            
-        if start_idx == -1:
-            print(f"⚠️ Could not locate start phrase for Ch {chapter['chapter_number']}: '{start_phrase[:30]}...'")
-            return ""
-
-        # 2. Find End
-        end_idx = -1
-        end_phrase = chapter.get('end_phrase', '')
-        
-        # Try specific end phrase first
-        found_end_match_start = find_fuzzy(full_text, end_phrase, start_idx)
-        if found_end_match_start != -1:
-             # We want the END of the phrase
-             # Re-match to get length
-             match = re.search(r'\s+'.join(map(re.escape, end_phrase.split())), full_text[found_end_match_start:])
-             if match:
-                 end_idx = found_end_match_start + match.end()
-
-        # 3. Fallback to Next Chapter Start if end phrase missing
-        if end_idx == -1 and next_chapter:
-            next_start_phrase = next_chapter.get('start_phrase', '')
-            next_start_idx = find_fuzzy(full_text, next_start_phrase, start_idx)
-            if next_start_idx != -1:
-                end_idx = next_start_idx
-                print(f"  ℹ️  Used next chapter start as boundary for Ch {chapter['chapter_number']}")
-
-        # 4. Final Fallback (just take a chunk if nothing else works)
-        if end_idx == -1:
-            print(f"⚠️ Could not locate end boundary for Ch {chapter['chapter_number']}. taking 20k chars.")
-            end_idx = min(len(full_text), start_idx + 20000)
-
-        return full_text[start_idx:end_idx].strip()
-
-    def allocate_pages_arc_aware(self, chapter_index: list, target_page_count: int) -> list:
-        """
-        Stratified Narrative Allocation:
-        Divides the book into three acts and enforces page distribution to ensure
-        the story reaches the end, even with a limited page budget.
-        
-        Selection Strategy:
-        1. Mandatory Chapters: First chapter, Last chapter, and 'Climax' tagged chapters.
-        2. Priority Scoring: Uses 'importance_score' to pick the best chapters in each act.
-        3. Gap Handling: Notes skipped chapters to generate bridge captions later.
-        """
-        total_chapters = len(chapter_index)
-        if total_chapters == 0:
-            return []
-
-        print(f"📊 Allocating {target_page_count} pages across {total_chapters} chapters using Stratified Sampling...")
-
-        # 1. Define Acts (Approximate 25% / 50% / 25% split)
-        # We can also use 'narrative_arc' tags if reliable, but position is safer fallback
-        act1_end = max(1, int(total_chapters * 0.25))
-        act2_end = max(act1_end + 1, int(total_chapters * 0.80)) # Extended middle
-        
-        acts = {
-            "Act 1 (Setup)": chapter_index[:act1_end],
-            "Act 2 (Confrontation)": chapter_index[act1_end:act2_end],
-            "Act 3 (Resolution)": chapter_index[act2_end:]
-        }
-
-        # 2. Assign Page Budgets (Target: ~20% / ~55% / ~25%)
-        # Ensure minimal viable storytelling
-        budget_act1 = max(1, int(target_page_count * 0.20))
-        budget_act3 = max(1, int(target_page_count * 0.25))
-        budget_act2 = max(1, target_page_count - budget_act1 - budget_act3)
-
-        print(f"   Acts Budget: Act 1: {budget_act1}, Act 2: {budget_act2}, Act 3: {budget_act3}")
-
-        selected_chapters = []
-
-        def select_best_chapters(chapters, budget, is_last_act=False):
-            if not chapters:
-                return []
-            
-            # Always prioritize high importance
-            # Default importance to 5 if missing
-            ranked = sorted(chapters, key=lambda x: x.get('importance_score', 5), reverse=True)
-            
-            # Mandatory inclusions for structural integrity
-            must_haves = []
-            
-            # If this is Act 1, include Chapter 1
-            if chapters[0]['chapter_number'] == 1:
-                must_haves.append(chapters[0])
-            
-            # If this is Last Act, include the very last chapter
-            if is_last_act:
-                 must_haves.append(chapters[-1])
-
-            # Dedupe must_haves from ranked
-            must_have_ids = {ch['chapter_number'] for ch in must_haves}
-            pool = [ch for ch in ranked if ch['chapter_number'] not in must_have_ids]
-            
-            # Fill remaining budget
-            needed = budget - len(must_haves)
-            picked = must_haves + pool[:max(0, needed)]
-            
-            return sorted(picked, key=lambda x: x['chapter_number'])
-
-        # Execute Selection
-        sel_act1 = select_best_chapters(acts["Act 1 (Setup)"], budget_act1)
-        sel_act2 = select_best_chapters(acts["Act 2 (Confrontation)"], budget_act2)
-        sel_act3 = select_best_chapters(acts["Act 3 (Resolution)"], budget_act3, is_last_act=True)
-        
-        all_selected = sel_act1 + sel_act2 + sel_act3
-        
-        # Sort by chapter number
-        all_selected.sort(key=lambda x: x['chapter_number'])
-        
-        # Deduplicate (in case of overlap or logic quirks)
-        unique_selected = []
-        seen_ids = set()
-        for ch in all_selected:
-            if ch['chapter_number'] not in seen_ids:
-                unique_selected.append(ch)
-                seen_ids.add(ch['chapter_number'])
-        
-        # If we are under budget (rare), fill with next highest priority chapters globally
-        if len(unique_selected) < target_page_count:
-            remaining = target_page_count - len(unique_selected)
-            print(f"   Under budget by {remaining} pages. Filling with high-priority scenes...")
-            unselected = [ch for ch in chapter_index if ch['chapter_number'] not in seen_ids]
-            unselected.sort(key=lambda x: x.get('importance_score', 5), reverse=True)
-            unique_selected.extend(unselected[:remaining])
-            unique_selected.sort(key=lambda x: x['chapter_number'])
-        
-        # If over budget (due to mandatories), trim lowest priority from Act 2
-        if len(unique_selected) > target_page_count:
-             print(f"   Over budget. Trimming...")
-             # Keep first and last always
-             core = [unique_selected[0], unique_selected[-1]]
-             middle = unique_selected[1:-1]
-             middle.sort(key=lambda x: x.get('importance_score', 5), reverse=True)
-             keep_middle = middle[:target_page_count-2]
-             unique_selected = [core[0]] + sorted(keep_middle, key=lambda x: x['chapter_number']) + [core[1]]
-
-        # Generate final allocation list with Gap detection
-        final_allocations = []
-        last_chapter_num = 0
-        
-        for i, chapter in enumerate(unique_selected):
-            # Detect Gap
-            gap_summary = ""
-            if last_chapter_num != 0 and chapter['chapter_number'] > last_chapter_num + 1:
-                gap_size = chapter['chapter_number'] - last_chapter_num - 1
-                gap_summary = f"TIME JUMP: {gap_size} chapters skipped. Summarize events between Ch {last_chapter_num} and {chapter['chapter_number']} in a caption."
-            
-            final_allocations.append({
-                'page_number': i + 1,
-                'chapter_number': chapter['chapter_number'],
-                'chapter_title': chapter['title'],
-                'page_within_chapter': 1, # Simplified: 1 page per chapter for this condensed mode
-                'total_pages_in_chapter': 1,
-                'arc_position': 'climax' if i > len(unique_selected) * 0.8 else 'standard',
-                'narrative_arc': chapter.get('narrative_arc', 'Standard'),
-                'page_goal': f"Focus on: {chapter.get('key_event_summary', 'Plot progression')}",
-                'narrative_bridge': gap_summary
-            })
-            last_chapter_num = chapter['chapter_number']
-
-        print(f"✅ Allocated {len(final_allocations)} pages covering Ch {unique_selected[0]['chapter_number']} to Ch {unique_selected[-1]['chapter_number']}")
-        return final_allocations
-
-
     @retry_with_backoff()
-    async def write_page_script(
-        self,
-        page_allocation: dict,  # Simple page allocation with chapter info
-        full_text: str,         # FULL book text
-        chapter_index: list,    # Minimal structural index
-        style: str,
-        context_constraints: str = "",
-        dialogue_mode: str = "balanced",
-        previous_context: PageContext = None  # Rolling context from previous page
-    ):
+    async def write_page_script(self, cache_name: str, full_text_fallback: str, blueprint_item: dict, style: str):
         """
-        THE SCRIBE: Writes the detailed panel directions for a SINGLE page with FULL TEXT ACCESS.
-        Now uses Beat-Based Adaptation.
+        PASS 2: THE SCRIPTWRITER
+        Generates the detailed panel script for a SINGLE page, strictly following the blueprint.
         """
+        page_num = blueprint_item['page_number']
+        
         async with scribe_limiter:
-            # Get chapter info
-            chapter_num = page_allocation['chapter_number']
-            chapter = next(ch for ch in chapter_index if ch['chapter_number'] == chapter_num)
+            print(f"✍️  Scripting Page {page_num}...")
             
-            # Find next chapter for boundary
-            next_ch_struct = next((ch for ch in chapter_index if ch['chapter_number'] == chapter_num + 1), None)
-
-            print(f"✍️  Scripting Page {page_allocation['page_number']}: Chapter {chapter_num} ({chapter['title']}) - Page {page_allocation['page_within_chapter']}/{page_allocation['total_pages_in_chapter']}...")
-
-            # Extract full chapter text using robust method
-            chapter_text = self.get_chapter_text(full_text, chapter, next_ch_struct)
-
-            # Also include adjacent chapters for context (prevent boundary issues)
-            prev_chapter_text = ""
-            next_chapter_text = ""
-
-            if chapter_num > 1:
-                prev_ch = next((ch for ch in chapter_index if ch['chapter_number'] == chapter_num - 1), None)
-                if prev_ch:
-                    # We don't need next_ch for prev_ch extraction, just best effort
-                    prev_full = self.get_chapter_text(full_text, prev_ch, chapter)
-                    prev_chapter_text = prev_full # Pass full previous chapter
-
-            if next_ch_struct:
-                # We need next-next for next extraction? Just use None, it's context.
-                next_full = self.get_chapter_text(full_text, next_ch_struct, None)
-                next_chapter_text = next_full # Pass full next chapter
-
-            # Build context
-            full_context = f"""
-PREVIOUS CHAPTER (for context):
-{prev_chapter_text}
-
-CURRENT CHAPTER TEXT:
-{chapter_text}
-
-NEXT CHAPTER (for context):
-{next_chapter_text}
-"""
-
-            # Build continuity context from previous page
-            continuity_context = ""
-            if previous_context and previous_context.last_panel_summary:
-                char_states_str = json.dumps(previous_context.character_states, indent=2) if previous_context.character_states else "No tracked characters yet."
-                threads_str = "\n".join(f"- {t}" for t in previous_context.open_dialogue_threads) if previous_context.open_dialogue_threads else "None."
-                continuity_context = f"""
-CONTINUITY FROM PREVIOUS PAGE:
-Last panel: {previous_context.last_panel_summary}
-
-Character states entering this page:
-{char_states_str}
-
-Open dialogue/narrative threads:
-{threads_str}
-
-Scene momentum: {previous_context.scene_momentum}
-
-CRITICAL: Maintain visual and narrative continuity with the above.
-"""
-            # Handle Narrative Bridges (Time Jumps)
-            bridge_instruction = ""
-            if page_allocation.get('narrative_bridge'):
-                bridge_instruction = f"""
-*** NARRATIVE TIME JUMP DETECTED ***
-{page_allocation['narrative_bridge']}
-INSTRUCTION: You MUST include a caption in the first panel that bridges this gap (e.g., "Weeks later...", "After leaving the coral reefs...").
-Summarize the missing action briefly to reorient the reader.
-"""
-
             prompt = f"""
-Act as an Award-Winning Graphic Novel Scriptwriter.
-
-TASK:
-Adapt Chapter {chapter_num} into Page {page_allocation['page_number']}.
-You are not just copying text; you are translating prose into a visual medium.
-
-STORYTELLING PRINCIPLES:
-- SHOW, DON'T TELL: If the prose says "He was angry," describe a panel of a clenched fist or a shattered glass.
-- COMPRESSION: One panel must often do the work of three paragraphs. 
-- DIALOGUE: Distill long speeches into 'comic-sized' bubbles (max 25 words per bubble). Preserve the AUTHOR'S VOICE, but remove fluff.
-- THE PAGE TURN: The final panel of this page MUST create curiosity or tension to make the reader turn the page.
-
-CONTINUITY & ARC:
-{continuity_context}
-{bridge_instruction}
-Chapter Arc: {page_allocation.get('narrative_arc', 'Standard')}
-Page Goal: {page_allocation.get('page_goal', 'Move story forward')}
-Visual Theme: {chapter.get('visual_theme', 'Standard')}
-
-PANEL COMPOSITION GUIDANCE:
-- Vary the "Camera Angle": (Wide Shot for setting, Close-up for emotion, Birds-eye for scale).
-- Panel 1: Must establish the "Where" and "Who" if the scene changed.
-- Last Panel: Must be a "Hook."
-- ACTION scenes: Use 2-3 large dynamic panels
-- DIALOGUE scenes: Use 3-5 panels for conversation flow
-- MAXIMUM 5 PANELS PER PAGE.
-
-OUTPUT REQUIREMENTS:
-- 'visual_description': Focus on cinematic lighting, character expression, and 'Mise-en-scène'.
-- 'dialogue': Naturalistic, punchy speech. No 'Narrator' tags inside the string.
-- 'caption': Use for internal monologue, narration, or time/location stamps.
-- 'characters': List specifically who is in the panel.
-
-CRITICAL: The FULL CHAPTER TEXT is provided below. Read it carefully and adapt dialogue
-and scenes directly from it, distilling for impact.
-
-OUTPUT FORMAT: JSON with panels array.
-"""
-
-            models_to_try = [self.get_model_for_task("page_script"), "gemini-2.0-flash"]
-            last_error = None
-
-            for model_name in models_to_try:
-                try:
-                    response = await client.aio.models.generate_content(
-                        model=model_name,
-                        contents=[prompt, f"SOURCE TEXT:\n{full_context}"],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema={
-                                "type": "OBJECT",
-                                "properties": {
-                                    "page_number": {"type": "INTEGER"},
-                                    "panels": {
-                                        "type": "ARRAY",
-                                        "items": {
-                                            "type": "OBJECT",
-                                            "properties": {
-                                                "panel_id": {"type": "INTEGER"},
-                                                "visual_description": {"type": "STRING"},
-                                                "dialogue": {"type": "STRING"},
-                                                "caption": {"type": "STRING"},
-                                                "advice": {
-                                                    "type": "OBJECT",
-                                                    "properties": {
-                                                        "continuity_notes": {"type": "STRING"},
-                                                        "historical_constraints": {"type": "STRING"},
-                                                        "character_gear": {"type": "STRING"}
-                                                    },
-                                                    "required": ["continuity_notes", "historical_constraints", "character_gear"]
-                                                },
-                                                "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
-                                                "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "caption-box"]}
-                                            },
-                                            "required": ["panel_id", "visual_description", "advice", "characters", "bubble_position"]
-                                        }
-                                    }
-                                },
-                                "required": ["page_number", "panels"]
-                            }
-                        )
-                    )
-                    return response.parsed
-                except Exception as e:
-                    last_error = e
-                    if "429" in str(e):
-                        print(f"⚠️ Model {model_name} rate limited on Page {page_allocation['page_number']}. Trying fallback...")
-                        continue
-                    raise e
+            Act as a Graphic Novel Scriptwriter.
             
-            raise last_error
+            TASK:
+            Write the panel-by-panel script for PAGE {page_num}.
+            
+            BLUEPRINT FOR THIS PAGE:
+            Summary: {blueprint_item['summary']}
+            Mood: {blueprint_item['mood']}
+            Visual Notes: {blueprint_item['visual_notes']}
+            Focus Text/Context: "{blueprint_item['focus_text']}"
+            
+            STYLE: {style}
+            
+            INSTRUCTIONS:
+            1. Break this page into 3-6 panels.
+            2. Use 'visual_description' for the artist (cinematic, detailed).
+            3. Use 'dialogue' for characters (keep it brief, punchy).
+            4. Use 'caption' for narration.
+            5. Ensure visual continuity with the blueprint notes.
+            
+            OUTPUT FORMAT: JSON.
+            """
+
+            # Prepare request
+            model = config.scripting_model_page_script
+            
+            if cache_name:
+                contents = [prompt]
+                cached_content = cache_name
+            else:
+                # For specific page scripting without cache, we ideally need context. 
+                # Since we are in fallback mode, we pass the 'focus_text' from blueprint 
+                # plus a bit of the summary as the "source".
+                # We do NOT send the full book again to save tokens if cache failed.
+                contents = [prompt, f"RELEVANT SOURCE TEXT:\n{blueprint_item['focus_text']}"]
+                cached_content = None
+
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    cached_content=cached_content,
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "OBJECT",
+                        "properties": {
+                            "page_number": {"type": "INTEGER"},
+                            "panels": {
+                                "type": "ARRAY",
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "panel_id": {"type": "INTEGER"},
+                                        "visual_description": {"type": "STRING"},
+                                        "dialogue": {"type": "STRING"},
+                                        "caption": {"type": "STRING"},
+                                        "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                        "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "caption-box"]}
+                                    },
+                                    "required": ["panel_id", "visual_description", "characters"]
+                                }
+                            }
+                        },
+                        "required": ["page_number", "panels"]
+                    }
+                )
+            )
+            
+            # Post-process: Ensure page number matches
+            result = response.parsed
+            result['page_number'] = page_num
+            return result
 
     async def generate_script(self, style: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
         """
-        Main orchestration method: Generates complete script using simplified pipeline.
+        Main orchestration method:
+        1. Load Content
+        2. Create Cache
+        3. Director Pass (Blueprint)
+        4. Scriptwriter Pass (Parallel Execution)
         """
-        # Save the result
+        # Output path
         suffix = "_test_page.json" if test_mode else "_full_script.json"
         output_file = self.output_dir / f"{self.book_path.stem}{suffix}"
+        
+        if output_file.exists() and not test_mode:
+             print(f"⏭️  Skipping Script Generation (Already exists: {output_file})")
+             with open(output_file, "r") as f:
+                 return json.load(f)
 
-        if output_file.exists():
-            print(f"⏭️  Skipping Full Script Generation (Already exists: {output_file})")
-            with open(output_file, "r") as f:
-                return json.load(f)
+        # 1. Load Content
+        full_text = self.load_content(test_mode=False) # Always load full for caching
+        target_pages = target_page_override or (3 if test_mode else 10)
+        
+        print(f"\n📚 Scripting '{self.book_path.stem}'")
+        print(f"   Target Length: {target_pages} pages")
+        print(f"   Style: {style}")
 
-        full_text = self.load_content(test_mode=False) # Always load full for map
+        # 2. Create Cache (The Enabler)
+        cache_name = await self._get_or_create_cache(full_text)
 
-        # Calculate optimal page count
-        from utils import calculate_page_count
-        word_count = len(full_text.split())
+        # 3. Director Pass (Blueprint)
+        blueprint = await self.generate_pacing_blueprint(cache_name, full_text, target_pages, style)
+        
+        # Save blueprint for debugging
+        blueprint_path = self.output_dir / f"{self.book_path.stem}_blueprint.json"
+        with open(blueprint_path, "w") as f:
+            json.dump(blueprint, f, indent=2)
+        print(f"✅ Blueprint created: {blueprint_path}")
 
-        page_calc = calculate_page_count(
-            word_count=word_count,
-            test_mode=test_mode,
-            user_override=target_page_override
-        )
+        # 4. Scriptwriter Pass (Parallel)
+        print(f"⚡ Starting Parallel Script Generation for {len(blueprint)} pages...")
+        
+        tasks = [
+            self.write_page_script(cache_name, full_text, item, style)
+            for item in blueprint
+        ]
+        
+        # Execute all pages at once (bounded by scribe_limiter)
+        full_script = await asyncio.gather(*tasks)
+        
+        # Sort by page number just in case
+        full_script.sort(key=lambda x: x['page_number'])
 
-        # Display calculation
-        print(f"\n📊 Input Analysis:")
-        print(f"   Words: {word_count:,}")
-        print(f"   Category: {page_calc['density_category']}")
-        print(f"   Target pages: {page_calc['recommended']} (range: {page_calc['minimum']}-{page_calc['maximum']})")
-        print(f"   Est. time: ~{page_calc['estimated_time_minutes']} min")
-        if page_calc['warning']:
-            print(f"   ⚠️  {page_calc['warning']}\n")
-
-        target_pages = page_calc['recommended']
-
-        # 1. THE MAPPER PHASE
-        # Generate minimal chapter index for structural boundaries
-        print("🗺️  Generating Chapter Index...")
-        chapter_index = await self.generate_chapter_map(full_text)
-
-        # 2. ARC-AWARE PAGE ALLOCATION
-        # Allocate pages using scene type and narrative position weights
-        print(f"📊 Allocating {target_pages} pages across chapters...")
-        page_allocations = self.allocate_pages_arc_aware(chapter_index, target_pages)
-
-        # 3. THE SCRIBE PHASE - Sequential with rolling context
-        # Generate pages sequentially to maintain cross-page continuity
-        print(f"✍️  Scripting {len(page_allocations)} pages sequentially with cross-page context...")
-
-        full_script = []
-        rolling_context = PageContext()
-
-        for page_alloc in page_allocations:
-            page = await self.write_page_script(
-                page_alloc,
-                full_text,
-                chapter_index,
-                style,
-                context_constraints,
-                dialogue_mode='balanced',
-                previous_context=rolling_context
-            )
-            full_script.append(page)
-
-            # Extract context for next page
-            rolling_context = extract_context_from_page(page, rolling_context)
-
-        # Validate dialogue fidelity (warning only, doesn't block)
-        self._validate_dialogue_fidelity(full_script, chapter_index, full_text)
-
-        # Save the result
+        # Save Final Script
         with open(output_file, "w") as f:
             json.dump(full_script, f, indent=2)
 
-        print(f"✅ Script Generation Complete! Saved to: {output_file}")
+        print(f"🎉 Script Generation Complete! Saved to: {output_file}")
         return full_script
 
-    def _validate_dialogue_fidelity(self, script: list, chapter_index: list, full_text: str):
-        """
-        Checks if dialogue appears in source text.
-        Relaxed for adaptation: simply logs stats rather than warning heavily about 'synthetic' dialogue.
-        """
-        print("\n🔍 Validating dialogue fidelity...")
-        adapted_count = 0
-        total_dialogue = 0
-
-        for page in script:
-            for panel in page.get('panels', []):
-                dialogue = panel.get('dialogue', '')
-                if not dialogue or len(dialogue.strip()) < 5:
-                    continue
-                
-                total_dialogue += 1
-                
-                # Check if most of the dialogue words appear in sequence in the source
-                dialogue_clean = dialogue.strip().replace('"', '').replace("'", "")
-                words = dialogue_clean.split()
-                
-                if len(words) < 3:
-                    continue
-
-                search_phrase = ' '.join(words[:min(8, len(words))])
-                if search_phrase.lower() not in full_text.lower():
-                    adapted_count += 1
-
-        print(f"  ℹ️  Dialogue Stats: {adapted_count}/{total_dialogue} lines appear to be adapted/distilled.")
-        print("  (This is expected for a graphic novel adaptation).")
-
 if __name__ == "__main__":
+    # Test run
     agent = ScriptingAgent("assets/input/20-thousand-leagues-under-the-sea.txt")
-    # Generating a condensed 10-page version of the entire story
     asyncio.run(agent.generate_script(
         style="Lush Watercolor", 
-        test_mode=False, 
-        target_page_override=10
+        test_mode=True, 
+        target_page_override=3
     ))
-

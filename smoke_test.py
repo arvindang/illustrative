@@ -24,7 +24,7 @@ async def run_smoke_test():
     # 2. Character Design
     print("\n--- STEP 2: CHARACTER DESIGN ---")
     architect = CharacterArchitect(script_path)
-    await architect.design_all_characters(style=style)
+    await architect.design_all_assets(style=style)
         
     # 3. Illustration (Checkpointing will be active)
     print("\n--- STEP 3: ILLUSTRATION ---")

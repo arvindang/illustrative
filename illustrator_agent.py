@@ -42,7 +42,52 @@ class IllustratorAgent:
         if self.obj_base_dir.exists():
             self.known_objects = [d.name for d in self.obj_base_dir.iterdir() if d.is_dir()]
 
+        # Build robust character lookup map
+        self.character_map = {}
+        self._build_character_map()
+
         self.current_model = config.image_model_primary
+
+    def _build_character_map(self):
+        """
+        Scans the character directory to build a lookup map.
+        Maps: 'Canonical Name', 'Folder Name', and 'Last Name' -> Folder Path
+        Example: "Professor Aronnax", "professor_aronnax", "Aronnax" -> /path/to/professor_aronnax
+        """
+        if not self.char_base_dir.exists():
+            return
+
+        for char_folder in self.char_base_dir.iterdir():
+            if not char_folder.is_dir():
+                continue
+            
+            metadata_path = char_folder / "metadata.json"
+            if not metadata_path.exists():
+                continue
+
+            try:
+                with open(metadata_path, "r") as f:
+                    meta = json.load(f)
+                    
+                folder_name = char_folder.name
+                canonical_name = meta.get('name', '').lower()
+                
+                # 1. Map folder name (exact match)
+                self.character_map[folder_name.lower()] = char_folder
+                
+                # 2. Map canonical name (exact match)
+                if canonical_name:
+                    self.character_map[canonical_name] = char_folder
+                    
+                    # 3. Map last name/single name variants
+                    parts = canonical_name.split()
+                    if len(parts) > 1:
+                        last_name = parts[-1]
+                        # Only map last name if it's unique (simple collision avoidance)
+                        if last_name not in self.character_map:
+                            self.character_map[last_name] = char_folder
+            except Exception as e:
+                print(f"⚠️ Error reading metadata for {char_folder}: {e}")
 
     def load_character_refs(self, char_name: str):
         """
@@ -59,19 +104,25 @@ class IllustratorAgent:
         if char_name in self._character_cache:
             return self._character_cache[char_name], self._metadata_cache[char_name]
 
-        # Load from disk
-        if not self.char_base_dir.exists():
-            print(f"⚠️ Warning: Character folder not found for {char_name}")
-            return [], {}
+        # Resolve character folder using the map
+        char_key = char_name.lower().strip()
+        char_folder = self.character_map.get(char_key)
+        
+        # Try finding by partial match if exact key missing (e.g., "Dr. Aronnax" -> "aronnax")
+        if not char_folder:
+            parts = char_key.split()
+            if parts:
+                base_name = parts[-1]
+                char_folder = self.character_map.get(base_name)
 
-        # Normalize character name to folder format
-        from character_architect import CharacterArchitect
-        arch = CharacterArchitect("")  # Temporary instance for normalization
-        _, folder_name = arch.normalize_character_name(char_name)
-        char_folder = self.char_base_dir / folder_name
-
-        if not char_folder.exists():
-            print(f"⚠️ Warning: No assets found for {char_name}")
+        if not char_folder or not char_folder.exists():
+            # Fallback: legacy normalization attempt (mostly for debug)
+            # from character_architect import CharacterArchitect
+            # arch = CharacterArchitect("") 
+            # _, folder_name = arch.normalize_character_name(char_name)
+            # char_folder = self.char_base_dir / folder_name
+            # if not char_folder.exists():
+            print(f"⚠️ Warning: Character assets not found for '{char_name}'")
             return [], {}
 
         metadata_path = char_folder / "metadata.json"
@@ -89,12 +140,12 @@ class IllustratorAgent:
             if img_path.exists():
                 ref_images.append(Image.open(img_path))
 
-        # Cache for future use
+        # Cache for future use (cache by the REQUESTED name to speed up subsequent hits)
         self._character_cache[char_name] = ref_images
         self._metadata_cache[char_name] = meta
 
         if ref_images:
-            print(f"  📂 Lazy-loaded {len(ref_images)} refs for {char_name}")
+            print(f"  📂 Lazy-loaded {len(ref_images)} refs for '{char_name}' (mapped to {meta.get('name')})")
 
         return ref_images, meta
 
