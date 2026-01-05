@@ -1,4 +1,7 @@
 python-dotenv
 google-genai
+google-api-core
 Pillow
 streamlit
+reportlab
+ebooklib
