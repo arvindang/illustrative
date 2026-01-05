@@ -7,7 +7,7 @@ from typing import Optional
 from scripting_agent import ScriptingAgent
 from illustrator_agent import IllustratorAgent
 from compositor_agent import CompositorAgent
-from constants import ART_STYLES, NARRATIVE_TONES
+from constants import ART_STYLES
 from utils import calculate_page_count
 from config import config
 
@@ -87,6 +87,17 @@ def navigate_to(page: str):
     st.session_state.page = page
     st.query_params["page"] = page
     st.rerun()
+
+
+def render_feedback_link():
+    """Render a subtle feedback/support link to GitHub Discussions."""
+    st.markdown(
+        '<p style="text-align: center; color: #888; font-size: 0.85em;">'
+        '💬 Questions or feedback? Visit our '
+        '<a href="https://github.com/arvindang/illustrative-public/discussions" target="_blank" style="color: #888;">Community Discussions</a>'
+        '</p>',
+        unsafe_allow_html=True
+    )
 
 
 def db_register(email: str, password: str) -> tuple[bool, str]:
@@ -281,7 +292,7 @@ def run_async(coro):
         loop.close()
 
 
-async def execute_pipeline(status, input_path: str, style: str, tone: str, target_pages: int, test_mode: bool, novel_id: str = None):
+async def execute_pipeline(status, input_path: str, style: str, target_pages: int, test_mode: bool, novel_id: str = None):
     """Execute the full pipeline."""
     input_stem = Path(input_path).stem
 
@@ -291,7 +302,7 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
 
     status.write("💾 Caching book content...")
     script = await scripter.generate_script(
-        style=f"{style}, {tone}", test_mode=test_mode, target_page_override=target_pages
+        style=style, test_mode=test_mode, target_page_override=target_pages
     )
     status.write(f"✅ Script complete: {len(script)} pages generated")
 
@@ -300,7 +311,7 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
 
     status.write("")
     status.write("--- STEP 2/4: ILLUSTRATION ---")
-    style_prompt = f"{style} style, {tone} tone, high-quality graphic novel art."
+    style_prompt = f"{style} style, high-quality graphic novel art."
     illustrator = IllustratorAgent(str(script_path), style_prompt)
 
     status.write("🎨 Generating character & object reference sheets...")
@@ -436,6 +447,7 @@ def render_dashboard():
     novels = db_list_novels(st.session_state.user_id)
     if not novels:
         st.info("No graphic novels yet. Click 'New Novel' to get started!")
+        render_feedback_link()
         return
 
     for novel in novels:
@@ -449,6 +461,8 @@ def render_dashboard():
                 db_delete_novel(novel['id'], st.session_state.user_id)
                 st.rerun()
         st.divider()
+
+    render_feedback_link()
 
 
 def render_settings_page():
@@ -475,6 +489,8 @@ def render_settings_page():
                 st.rerun()
 
     st.divider()
+    render_feedback_link()
+
     if st.button("← Back to Dashboard", use_container_width=True):
         navigate_to('dashboard')
 
@@ -518,11 +534,7 @@ def render_generate_page():
             page_calc = calculate_page_count(word_count)
             st.info(f"Recommended: {page_calc['recommended']} pages")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            style = st.selectbox("Art Style", ART_STYLES)
-        with col2:
-            tone = st.selectbox("Tone", NARRATIVE_TONES)
+        style = st.selectbox("Art Style", ART_STYLES)
 
         st.divider()
 
@@ -536,11 +548,11 @@ def render_generate_page():
 
             novel_id = None
             if is_logged_in():
-                novel_id = db_create_novel(st.session_state.user_id, title, uploaded_file.name, style, tone, target_pages)
+                novel_id = db_create_novel(st.session_state.user_id, title, uploaded_file.name, style, None, target_pages)
 
             with st.status("🚀 Running...", expanded=True) as status:
                 try:
-                    run_async(execute_pipeline(status, str(input_path), style, tone, target_pages, test_mode, novel_id))
+                    run_async(execute_pipeline(status, str(input_path), style, target_pages, test_mode, novel_id))
                     status.update(label="✅ Complete!", state="complete")
                     st.session_state.pipeline_complete = True
                     if novel_id:
@@ -572,6 +584,11 @@ def render_generate_page():
                 with open(epub_path, "rb") as f:
                     st.download_button("📚 EPUB", f.read(), f"{input_stem}.epub", "application/epub+zip", use_container_width=True)
 
+    # Feedback link for logged-in users
+    if is_logged_in():
+        st.divider()
+        render_feedback_link()
+
 
 def render_home_page():
     """Home page."""
@@ -594,7 +611,7 @@ into beautifully illustrated graphic novels using **Google Gemini 3** and **Nano
         st.caption("Upload any public domain book as a .txt file")
     with col2:
         st.markdown("**2. Customize**")
-        st.caption("Choose your art style and narrative tone")
+        st.caption("Choose your preferred art style")
     with col3:
         st.markdown("**3. Generate**")
         st.caption("AI creates scripts, illustrations, and layouts")
