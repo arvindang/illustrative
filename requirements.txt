@@ -5,3 +5,22 @@ Pillow
 streamlit
 reportlab
 ebooklib
+
+# Database
+sqlalchemy>=2.0
+psycopg2-binary
+alembic
+
+# API
+fastapi
+uvicorn[standard]
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+httpx
+
+# Storage
+boto3
+
+# Encryption (for API key storage)
+cryptography

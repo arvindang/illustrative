@@ -93,3 +93,10 @@ Run Streamlit and VENV
 ```
 source venv/bin/activate && streamlit run app.py
 ```
+
+Local Development
+
+### Terminal 1: Run API
+```
+uvicorn api.main:app --reload --port 8000
+```

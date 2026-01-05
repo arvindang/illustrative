@@ -3,8 +3,9 @@ Centralized configuration for Illustrative AI pipeline.
 All model settings, rate limits, and paths are defined here.
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # Ensure environment variables are loaded before PipelineConfig is instantiated
@@ -19,6 +20,21 @@ class PipelineConfig:
 
     # ==================== API Configuration ====================
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+
+    # ==================== Database Configuration ====================
+    database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", ""))
+    jwt_secret_key: str = field(default_factory=lambda: os.getenv("JWT_SECRET_KEY", "dev-secret-change-me"))
+    encryption_key: str = field(default_factory=lambda: os.getenv("ENCRYPTION_KEY", ""))
+
+    # ==================== Storage Configuration ====================
+    bucket_name: str = field(default_factory=lambda: os.getenv("BUCKET", ""))
+    bucket_endpoint: str = field(default_factory=lambda: os.getenv("BUCKET_ENDPOINT", "https://storage.railway.app"))
+    bucket_access_key: str = field(default_factory=lambda: os.getenv("BUCKET_ACCESS_KEY_ID", ""))
+    bucket_secret_key: str = field(default_factory=lambda: os.getenv("BUCKET_SECRET_ACCESS_KEY", ""))
+    bucket_region: str = field(default_factory=lambda: os.getenv("BUCKET_REGION", "auto"))
+
+    # ==================== API URL (for Streamlit to call FastAPI) ====================
+    api_url: str = field(default_factory=lambda: os.getenv("API_URL", "http://localhost:8000"))
 
     # ==================== Model Selection ====================
     # Text/Logic Models

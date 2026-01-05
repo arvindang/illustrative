@@ -774,6 +774,45 @@ class CompositorAgent:
         print(f"✅ EPUB exported to {epub_path}")
         return epub_path
 
+    def export_and_upload(self, output_path: Path, novel_id: str, title: str = "Graphic Novel") -> dict:
+        """
+        Export PDF and EPUB, then upload to Railway bucket.
+
+        Args:
+            output_path: Base path for export files
+            novel_id: UUID of the novel record for storage key naming
+            title: Title for the EPUB metadata
+
+        Returns:
+            Dict with pdf_storage_key and epub_storage_key
+        """
+        from storage.bucket import get_storage
+
+        # Generate files locally
+        pdf_path = self.export_pdf(output_path)
+        epub_path = self.export_epub(output_path, title=title)
+
+        result = {"pdf_storage_key": None, "epub_storage_key": None}
+
+        # Upload to bucket if storage is configured
+        storage = get_storage()
+        if storage.is_configured():
+            if pdf_path and pdf_path.exists():
+                pdf_key = f"novels/{novel_id}/output.pdf"
+                storage.upload_file(str(pdf_path), pdf_key, content_type="application/pdf")
+                result["pdf_storage_key"] = pdf_key
+                print(f"☁️ PDF uploaded to bucket: {pdf_key}")
+
+            if epub_path and epub_path.exists():
+                epub_key = f"novels/{novel_id}/output.epub"
+                storage.upload_file(str(epub_path), epub_key, content_type="application/epub+zip")
+                result["epub_storage_key"] = epub_key
+                print(f"☁️ EPUB uploaded to bucket: {epub_key}")
+        else:
+            print("⚠️ Bucket not configured - files stored locally only")
+
+        return result
+
     def run(self):
         with open(self.script_path, "r") as f:
             script_data = json.load(f)
