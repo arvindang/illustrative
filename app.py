@@ -28,6 +28,13 @@ if engine is not None:
     except Exception:
         pass  # Tables may already exist
 
+# Startup diagnostics for Railway debugging
+import sys
+_db_configured = SessionLocal is not None
+print(f"[Startup] Database configured: {_db_configured}", file=sys.stderr)
+if not _db_configured:
+    print("[Startup] WARNING: DATABASE_URL not set - auth features will be disabled", file=sys.stderr)
+
 
 def get_db() -> Optional[Session]:
     """Get database session if configured."""
