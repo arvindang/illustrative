@@ -2,7 +2,11 @@ import asyncio
 import random
 import functools
 import json
+import time
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Callable
 from google.api_core import exceptions
 
 def retry_with_backoff(max_retries=5, initial_delay=2, max_delay=60):
@@ -65,6 +69,201 @@ class RateLimiter:
         spacing = 60.0 / self.rpm_limit
         await asyncio.sleep(spacing)
         self.semaphore.release()
+
+
+@dataclass
+class TokenRecord:
+    """Record of tokens used at a specific timestamp."""
+    timestamp: float
+    tokens: int
+
+
+class TPMRateLimiter:
+    """
+    Token-per-minute aware rate limiter using a sliding window approach.
+
+    Features:
+    - Pre-call token estimation to prevent exceeding limits
+    - Post-call token tracking from API response metadata
+    - Sliding 60-second window for accurate TPM tracking
+    - Configurable safety margin (e.g., 85% of limit)
+    - Thread-safe async implementation
+    """
+
+    def __init__(
+        self,
+        tpm_limit: int = 1_000_000,
+        safety_margin: float = 0.85,
+        window_seconds: float = 60.0
+    ):
+        self.tpm_limit = tpm_limit
+        self.effective_limit = int(tpm_limit * safety_margin)
+        self.window_seconds = window_seconds
+
+        # Sliding window storage
+        self._token_records: deque = deque()
+        self._lock = asyncio.Lock()
+
+        # Current window usage
+        self._current_tokens = 0
+
+    def _prune_old_records(self) -> None:
+        """Remove records older than the sliding window."""
+        cutoff = time.time() - self.window_seconds
+        while self._token_records and self._token_records[0].timestamp < cutoff:
+            old_record = self._token_records.popleft()
+            self._current_tokens -= old_record.tokens
+
+    def get_current_usage(self) -> int:
+        """Get current token usage in the sliding window."""
+        self._prune_old_records()
+        return self._current_tokens
+
+    def get_available_tokens(self) -> int:
+        """Get available tokens before hitting the limit."""
+        return max(0, self.effective_limit - self.get_current_usage())
+
+    async def wait_for_capacity(self, estimated_tokens: int) -> float:
+        """
+        Wait until there's enough capacity for the estimated tokens.
+        Returns the number of seconds waited.
+        """
+        wait_time = 0.0
+
+        async with self._lock:
+            while True:
+                self._prune_old_records()
+                available = self.effective_limit - self._current_tokens
+
+                if available >= estimated_tokens:
+                    return wait_time
+
+                # Calculate minimum wait time
+                if self._token_records:
+                    oldest = self._token_records[0]
+                    time_until_free = (oldest.timestamp + self.window_seconds) - time.time()
+                    sleep_time = max(0.1, time_until_free)
+                else:
+                    sleep_time = 1.0
+
+                print(f"   ⏳ TPM limit: waiting {sleep_time:.1f}s ({self._current_tokens:,}/{self.effective_limit:,} tokens used)")
+                await asyncio.sleep(sleep_time)
+                wait_time += sleep_time
+
+    def record_usage(self, tokens: int) -> None:
+        """Record token usage after an API call."""
+        record = TokenRecord(timestamp=time.time(), tokens=tokens)
+        self._token_records.append(record)
+        self._current_tokens += tokens
+
+    async def acquire(self, estimated_tokens: int) -> None:
+        """
+        Acquire capacity for an API call.
+        Waits if necessary, then pre-records the estimated usage.
+        """
+        await self.wait_for_capacity(estimated_tokens)
+        self.record_usage(estimated_tokens)
+
+    def update_actual_usage(self, estimated: int, actual: int) -> None:
+        """
+        Correct the recorded usage with actual token count from response.
+        Called after receiving API response with usage_metadata.
+        """
+        difference = actual - estimated
+        if difference != 0:
+            self._current_tokens += difference
+            # Add a correction record if we underestimated
+            if difference > 0:
+                self._token_records.append(TokenRecord(time.time(), difference))
+
+    def acquire_sync(self, estimated_tokens: int) -> None:
+        """
+        Synchronous version of acquire for non-async contexts.
+        Records usage without waiting (suitable for low-volume sync calls).
+        """
+        self._prune_old_records()
+        available = self.effective_limit - self._current_tokens
+
+        if available < estimated_tokens:
+            # In sync context, we can't wait - just log a warning
+            print(f"   ⚠️ TPM limit approaching: {self._current_tokens:,}/{self.effective_limit:,} tokens")
+
+        self.record_usage(estimated_tokens)
+
+
+# Global TPM limiter (singleton)
+_global_tpm_limiter: Optional[TPMRateLimiter] = None
+
+
+def get_tpm_limiter() -> TPMRateLimiter:
+    """Get or create the global TPM limiter."""
+    global _global_tpm_limiter
+    if _global_tpm_limiter is None:
+        from config import config
+        tpm_limit = getattr(config, 'tpm_limit', 1_000_000)
+        tpm_safety_margin = getattr(config, 'tpm_safety_margin', 0.85)
+        _global_tpm_limiter = TPMRateLimiter(
+            tpm_limit=tpm_limit,
+            safety_margin=tpm_safety_margin
+        )
+    return _global_tpm_limiter
+
+
+def estimate_tokens_for_text(prompt: str) -> int:
+    """
+    Estimate tokens for a text generation request.
+
+    Uses character-based estimation:
+    - ~4 characters per token for English text
+    - Add output buffer (typically 20% of input or min 1000)
+    """
+    input_estimate = len(prompt) // 4
+    output_estimate = max(1000, input_estimate // 5)
+    return input_estimate + output_estimate
+
+
+def estimate_tokens_for_image(prompt: str, num_reference_images: int = 0) -> int:
+    """
+    Estimate tokens for image generation.
+
+    Image models have different token profiles:
+    - Prompt: ~len(prompt)//4
+    - Each reference image: ~1500 tokens (encoded in multimodal)
+    - Output: ~500 tokens (mostly metadata)
+    """
+    prompt_tokens = len(prompt) // 4
+    image_tokens = num_reference_images * 1500
+    output_tokens = 500
+    return prompt_tokens + image_tokens + output_tokens
+
+
+def estimate_tokens_for_cache(content: str) -> int:
+    """
+    Estimate tokens for context cache creation.
+    The entire book is tokenized and stored.
+    """
+    return len(content) // 4 + 1000
+
+
+def extract_token_usage(response) -> tuple:
+    """
+    Extract token usage from Gemini API response.
+
+    Returns:
+        Tuple of (input_tokens, output_tokens)
+    """
+    if not hasattr(response, 'usage_metadata') or response.usage_metadata is None:
+        return (0, 0)
+
+    metadata = response.usage_metadata
+    input_tokens = getattr(metadata, 'prompt_token_count', 0) or 0
+    output_tokens = getattr(metadata, 'candidates_token_count', 0) or 0
+
+    # Also check for cached tokens
+    cached_tokens = getattr(metadata, 'cached_content_token_count', 0) or 0
+
+    return (input_tokens + cached_tokens, output_tokens)
+
 
 class ProductionManifest:
     """

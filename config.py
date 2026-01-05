@@ -58,6 +58,11 @@ class PipelineConfig:
     character_rpm: int = 5
     image_rpm: int = 5
 
+    # Tokens per minute (TPM)
+    tpm_limit: int = 1_000_000  # Google's default TPM limit
+    tpm_safety_margin: float = 0.85  # Use 85% of limit for safety buffer
+    tpm_enabled: bool = True  # Can disable for testing
+
     # ==================== Page Allocation ====================
     # Word density thresholds (words per page)
     density_short_story: int = 500    # < 20k words

@@ -13,6 +13,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import ImageReader
 from ebooklib import epub
 from config import config
+from utils import get_tpm_limiter, estimate_tokens_for_text, extract_token_usage
 
 class CompositorAgent:
     def __init__(self, script_path: str):
@@ -356,6 +357,10 @@ class CompositorAgent:
         }}
         """
 
+        # Track TPM for batch layout generation (sync context)
+        batch_estimated = estimate_tokens_for_text(prompt)
+        get_tpm_limiter().acquire_sync(batch_estimated)
+
         try:
             client = genai.Client(api_key=config.gemini_api_key)
             response = client.models.generate_content(
@@ -367,6 +372,10 @@ class CompositorAgent:
             )
 
             layouts_data = json.loads(response.text)
+
+            # Update TPM with actual usage
+            batch_input, batch_output = extract_token_usage(response)
+            get_tpm_limiter().update_actual_usage(batch_estimated, batch_input + batch_output)
 
             # Process and cache layouts
             W = self.page_width - (2 * self.margin)
@@ -446,7 +455,11 @@ class CompositorAgent:
           ...
         ]
         """
-        
+
+        # Track TPM for smart layout generation (sync context)
+        smart_estimated = estimate_tokens_for_text(prompt)
+        get_tpm_limiter().acquire_sync(smart_estimated)
+
         try:
             client = genai.Client(api_key=config.gemini_api_key)
             response = client.models.generate_content(
@@ -472,7 +485,11 @@ class CompositorAgent:
             )
             
             layout_data = response.parsed
-            
+
+            # Update TPM with actual usage
+            smart_input, smart_output = extract_token_usage(response)
+            get_tpm_limiter().update_actual_usage(smart_estimated, smart_input + smart_output)
+
             # Convert normalized coordinates to pixel dimensions
             W = self.page_width - (2 * self.margin)
             H = self.page_height - (2 * self.margin)

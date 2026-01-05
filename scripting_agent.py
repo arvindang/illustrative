@@ -11,7 +11,10 @@ load_dotenv()
 
 from google import genai
 from google.genai import types
-from utils import retry_with_backoff, RateLimiter
+from utils import (
+    retry_with_backoff, RateLimiter, get_tpm_limiter,
+    estimate_tokens_for_text, estimate_tokens_for_cache, extract_token_usage
+)
 from config import config
 
 # Lazy client initialization for runtime API key support
@@ -60,7 +63,11 @@ class ScriptingAgent:
         # For this prototype, we'll create a new one with a TTL. 
         
         print(f"💾 Caching book content ({len(content)} chars) to Gemini Context Cache...")
-        
+
+        # Acquire TPM capacity for cache creation
+        estimated_tokens = estimate_tokens_for_cache(content)
+        await get_tpm_limiter().acquire(estimated_tokens)
+
         try:
             # Note: The SDK for caching might vary slightly by version. 
             # We are using the 'google.genai' library.
@@ -156,6 +163,10 @@ class ScriptingAgent:
         model = config.scripting_model_global_context
         contents = [char_prompt] if cache_name else [char_prompt, f"SOURCE BOOK:\n{full_text_fallback[:50000]}"]
 
+        # Acquire TPM capacity for character manifest
+        char_estimated = estimate_tokens_for_text(char_prompt)
+        await get_tpm_limiter().acquire(char_estimated)
+
         char_response = await get_client().aio.models.generate_content(
             model=model,
             contents=contents,
@@ -179,6 +190,10 @@ class ScriptingAgent:
             )
         )
 
+        # Update TPM with actual usage from character manifest
+        char_input, char_output = extract_token_usage(char_response)
+        get_tpm_limiter().update_actual_usage(char_estimated, char_input + char_output)
+
         # Identify key objects
         obj_prompt = """
         Identify the top 3-5 most important RECURRING OBJECTS, VEHICLES, or LOCATIONS that need consistent visual design.
@@ -192,6 +207,10 @@ class ScriptingAgent:
         2. Visual description (materials, textures, colors)
         3. Key features (identifying shapes, mechanisms)
         """
+
+        # Acquire TPM capacity for object manifest
+        obj_estimated = estimate_tokens_for_text(obj_prompt)
+        await get_tpm_limiter().acquire(obj_estimated)
 
         obj_response = await get_client().aio.models.generate_content(
             model=model,
@@ -213,6 +232,10 @@ class ScriptingAgent:
                 }
             )
         )
+
+        # Update TPM with actual usage from object manifest
+        obj_input, obj_output = extract_token_usage(obj_response)
+        get_tpm_limiter().update_actual_usage(obj_estimated, obj_input + obj_output)
 
         # Validate parsed responses - .parsed returns None if JSON parsing failed
         if char_response.parsed is None:
@@ -278,6 +301,10 @@ class ScriptingAgent:
             contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback}"]
             cached_content = None
 
+        # Acquire TPM capacity for blueprint generation
+        blueprint_estimated = estimate_tokens_for_text(prompt)
+        await get_tpm_limiter().acquire(blueprint_estimated)
+
         response = await get_client().aio.models.generate_content(
             model=model,
             contents=contents,
@@ -301,7 +328,11 @@ class ScriptingAgent:
                 }
             )
         )
-        
+
+        # Update TPM with actual usage from blueprint generation
+        bp_input, bp_output = extract_token_usage(response)
+        get_tpm_limiter().update_actual_usage(blueprint_estimated, bp_input + bp_output)
+
         return response.parsed
 
     @retry_with_backoff()
@@ -360,6 +391,10 @@ class ScriptingAgent:
                 contents = [prompt, f"RELEVANT SOURCE TEXT:\n{blueprint_item['focus_text']}"]
                 cached_content = None
 
+            # Acquire TPM capacity for page script generation
+            script_estimated = estimate_tokens_for_text(prompt)
+            await get_tpm_limiter().acquire(script_estimated)
+
             response = await get_client().aio.models.generate_content(
                 model=model,
                 contents=contents,
@@ -390,7 +425,11 @@ class ScriptingAgent:
                     }
                 )
             )
-            
+
+            # Update TPM with actual usage from page script generation
+            script_input, script_output = extract_token_usage(response)
+            get_tpm_limiter().update_actual_usage(script_estimated, script_input + script_output)
+
             # Post-process: Ensure page number matches and enforce text limits
             result = response.parsed
             result['page_number'] = page_num
