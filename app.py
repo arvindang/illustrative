@@ -1,7 +1,6 @@
 """Streamlit frontend for Illustrate AI with user authentication."""
 import streamlit as st
 import asyncio
-import httpx
 from pathlib import Path
 from typing import Optional
 
@@ -15,16 +14,34 @@ from config import config
 # Page Configuration
 st.set_page_config(page_title="Illustrative AI", page_icon="📚", layout="centered")
 
-# API base URL
-API_URL = config.api_url
+# Database imports (direct access, no separate API needed)
+from sqlalchemy.orm import Session
+from models.base import SessionLocal, engine, Base
+from models.user import User
+from models.novel import GraphicNovel
+from api.dependencies import hash_password, verify_password, create_access_token
+
+# Create tables if they don't exist
+if engine is not None:
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass  # Tables may already exist
+
+
+def get_db() -> Optional[Session]:
+    """Get database session if configured."""
+    if SessionLocal is None:
+        return None
+    return SessionLocal()
 
 
 def init_session_state():
     """Initialize session state variables."""
     defaults = {
         # Auth state
-        'access_token': None,
-        'user': None,
+        'user_id': None,
+        'user_email': None,
         'page': 'home',  # home, login, register, dashboard, generate
 
         # Pipeline state
@@ -41,41 +58,191 @@ def init_session_state():
             st.session_state[key] = val
 
 
-def api_request(method: str, endpoint: str, **kwargs) -> Optional[dict]:
-    """Make an API request with error handling."""
-    try:
-        with httpx.Client(timeout=30.0) as client:
-            # Add auth header if logged in
-            headers = kwargs.pop('headers', {})
-            if st.session_state.access_token:
-                headers['Authorization'] = f"Bearer {st.session_state.access_token}"
-
-            response = client.request(method, f"{API_URL}{endpoint}", headers=headers, **kwargs)
-
-            if response.status_code == 401:
-                # Token expired, logout
-                st.session_state.access_token = None
-                st.session_state.user = None
-                st.session_state.page = 'login'
-                return None
-
-            response.raise_for_status()
-            return response.json()
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 400:
-            error = e.response.json().get('detail', 'Bad request')
-            st.error(error)
-        else:
-            st.error(f"API error: {e.response.status_code}")
-        return None
-    except httpx.RequestError as e:
-        st.error(f"Connection error: Unable to reach API server")
-        return None
-
-
 def is_logged_in() -> bool:
     """Check if user is authenticated."""
-    return st.session_state.access_token is not None
+    return st.session_state.user_id is not None
+
+
+def db_register(email: str, password: str) -> tuple[bool, str]:
+    """Register a new user."""
+    db = get_db()
+    if db is None:
+        return False, "Database not configured"
+
+    try:
+        existing = db.query(User).filter(User.email == email).first()
+        if existing:
+            db.close()
+            return False, "Email already registered"
+
+        user = User(email=email, password_hash=hash_password(password))
+        db.add(user)
+        db.commit()
+        db.close()
+        return True, "Account created"
+    except Exception as e:
+        db.close()
+        return False, str(e)
+
+
+def db_login(email: str, password: str) -> tuple[bool, str]:
+    """Login user."""
+    db = get_db()
+    if db is None:
+        return False, "Database not configured"
+
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if not user or not verify_password(password, user.password_hash):
+            db.close()
+            return False, "Invalid email or password"
+
+        user_id = str(user.id)
+        db.close()
+        return True, user_id
+    except Exception as e:
+        db.close()
+        return False, str(e)
+
+
+def db_has_api_key(user_id: str) -> bool:
+    """Check if user has saved API key."""
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        result = user.has_api_key() if user else False
+        db.close()
+        return result
+    except Exception:
+        db.close()
+        return False
+
+
+def db_get_api_key(user_id: str) -> Optional[str]:
+    """Get decrypted API key."""
+    db = get_db()
+    if db is None:
+        return None
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        key = user.get_gemini_api_key() if user and user.has_api_key() else None
+        db.close()
+        return key
+    except Exception:
+        db.close()
+        return None
+
+
+def db_save_api_key(user_id: str, api_key: str) -> bool:
+    """Save encrypted API key."""
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.set_gemini_api_key(api_key)
+            db.commit()
+        db.close()
+        return True
+    except Exception:
+        db.close()
+        return False
+
+
+def db_delete_api_key(user_id: str) -> bool:
+    """Delete API key."""
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.gemini_api_key_encrypted = None
+            db.commit()
+        db.close()
+        return True
+    except Exception:
+        db.close()
+        return False
+
+
+def db_list_novels(user_id: str) -> list[dict]:
+    """List user's novels."""
+    db = get_db()
+    if db is None:
+        return []
+    try:
+        novels = db.query(GraphicNovel).filter(
+            GraphicNovel.user_id == user_id
+        ).order_by(GraphicNovel.created_at.desc()).all()
+        result = [n.to_dict() for n in novels]
+        db.close()
+        return result
+    except Exception:
+        db.close()
+        return []
+
+
+def db_create_novel(user_id: str, title: str, source_filename: str, art_style: str, tone: str, page_count: int) -> Optional[str]:
+    """Create novel record."""
+    db = get_db()
+    if db is None:
+        return None
+    try:
+        novel = GraphicNovel(
+            user_id=user_id, title=title, source_filename=source_filename,
+            art_style=art_style, narrative_tone=tone, page_count=page_count, status="processing"
+        )
+        db.add(novel)
+        db.commit()
+        db.refresh(novel)
+        novel_id = str(novel.id)
+        db.close()
+        return novel_id
+    except Exception:
+        db.close()
+        return None
+
+
+def db_update_novel(novel_id: str, **kwargs) -> bool:
+    """Update novel."""
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        novel = db.query(GraphicNovel).filter(GraphicNovel.id == novel_id).first()
+        if novel:
+            for k, v in kwargs.items():
+                if hasattr(novel, k) and v is not None:
+                    setattr(novel, k, v)
+            db.commit()
+        db.close()
+        return True
+    except Exception:
+        db.close()
+        return False
+
+
+def db_delete_novel(novel_id: str, user_id: str) -> bool:
+    """Delete novel."""
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        novel = db.query(GraphicNovel).filter(
+            GraphicNovel.id == novel_id, GraphicNovel.user_id == user_id
+        ).first()
+        if novel:
+            db.delete(novel)
+            db.commit()
+        db.close()
+        return True
+    except Exception:
+        db.close()
+        return False
 
 
 def run_async(coro):
@@ -89,32 +256,24 @@ def run_async(coro):
 
 
 async def execute_pipeline(status, input_path: str, style: str, tone: str, target_pages: int, test_mode: bool, novel_id: str = None):
-    """Execute the full pipeline: Scripting -> Illustration -> Composition."""
+    """Execute the full pipeline."""
     input_stem = Path(input_path).stem
 
-    # Step 1: Scripting
     status.write("--- STEP 1/4: SCRIPTING ---")
     status.write("📚 Loading manuscript...")
-
     scripter = ScriptingAgent(input_path)
 
     status.write("💾 Caching book content...")
     script = await scripter.generate_script(
-        style=f"{style}, {tone}",
-        test_mode=test_mode,
-        target_page_override=target_pages
+        style=f"{style}, {tone}", test_mode=test_mode, target_page_override=target_pages
     )
-
     status.write(f"✅ Script complete: {len(script)} pages generated")
 
-    # Determine script path
     suffix = "_test_page.json" if test_mode else "_full_script.json"
     script_path = Path("assets/output") / f"{input_stem}{suffix}"
 
-    # Step 2: Illustration
     status.write("")
     status.write("--- STEP 2/4: ILLUSTRATION ---")
-
     style_prompt = f"{style} style, {tone} tone, high-quality graphic novel art."
     illustrator = IllustratorAgent(str(script_path), style_prompt)
 
@@ -123,27 +282,20 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
 
     status.write("🖼️ Generating panel images...")
     await illustrator.run_production()
-
     status.write("✅ Illustration complete!")
 
-    # Step 3: Composition
     status.write("")
     status.write("--- STEP 3/4: COMPOSITION ---")
     status.write("📐 Assembling final pages...")
-
     compositor = CompositorAgent(str(script_path))
     compositor.run()
-
     status.write("✅ Composition complete!")
 
-    # Step 4: Export
     status.write("")
     status.write("--- STEP 4/4: EXPORT ---")
-
     output_base = Path("assets/output") / input_stem
     title = input_stem.replace("-", " ").replace("_", " ").title()
 
-    # Use export_and_upload if we have a novel_id (logged in user)
     if novel_id:
         status.write("📄 Generating PDF & EPUB and uploading to cloud...")
         storage_keys = compositor.export_and_upload(output_base, novel_id, title=title)
@@ -152,28 +304,23 @@ async def execute_pipeline(status, input_path: str, style: str, tone: str, targe
     else:
         status.write("📄 Generating PDF...")
         pdf_path = compositor.export_pdf(output_base)
-
         status.write("📚 Generating EPUB...")
         epub_path = compositor.export_epub(output_base, title=title)
         storage_keys = {}
 
     status.write("✅ Export complete!")
 
-    # Store output paths for download
     st.session_state.output_paths = {
-        'script_path': str(script_path),
-        'output_base': str(output_base),
-        'input_stem': input_stem,
+        'script_path': str(script_path), 'output_base': str(output_base), 'input_stem': input_stem,
         'pdf_path': str(pdf_path) if pdf_path else None,
         'epub_path': str(epub_path) if epub_path else None,
         **storage_keys
     }
-
     return True
 
 
 def render_login_page():
-    """Render the login page."""
+    """Login page."""
     st.title("🔐 Login")
 
     with st.form("login_form"):
@@ -185,19 +332,14 @@ def render_login_page():
             if not email or not password:
                 st.error("Please enter email and password")
             else:
-                response = api_request(
-                    "POST",
-                    "/api/auth/login",
-                    data={"username": email, "password": password}
-                )
-                if response:
-                    st.session_state.access_token = response['access_token']
-                    # Fetch user info
-                    user = api_request("GET", "/api/auth/me")
-                    if user:
-                        st.session_state.user = user
-                        st.session_state.page = 'dashboard'
-                        st.rerun()
+                success, result = db_login(email, password)
+                if success:
+                    st.session_state.user_id = result
+                    st.session_state.user_email = email
+                    st.session_state.page = 'dashboard'
+                    st.rerun()
+                else:
+                    st.error(result)
 
     st.divider()
     col1, col2 = st.columns(2)
@@ -212,7 +354,7 @@ def render_login_page():
 
 
 def render_register_page():
-    """Render the registration page."""
+    """Registration page."""
     st.title("📝 Create Account")
 
     with st.form("register_form"):
@@ -229,15 +371,13 @@ def render_register_page():
             elif len(password) < 8:
                 st.error("Password must be at least 8 characters")
             else:
-                response = api_request(
-                    "POST",
-                    "/api/auth/register",
-                    json={"email": email, "password": password}
-                )
-                if response:
+                success, msg = db_register(email, password)
+                if success:
                     st.success("Account created! Please login.")
                     st.session_state.page = 'login'
                     st.rerun()
+                else:
+                    st.error(msg)
 
     st.divider()
     if st.button("← Back to Login", use_container_width=True):
@@ -246,108 +386,70 @@ def render_register_page():
 
 
 def render_dashboard():
-    """Render the user dashboard with novel list."""
+    """User dashboard."""
     st.title("📚 My Graphic Novels")
 
-    user = st.session_state.user
-    if user:
-        st.caption(f"Logged in as {user['email']}")
+    if st.session_state.user_email:
+        st.caption(f"Logged in as {st.session_state.user_email}")
 
-    # Action buttons
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("➕ New Novel", use_container_width=True, type="primary"):
             st.session_state.page = 'generate'
             st.rerun()
     with col2:
-        if st.button("🔑 API Key Settings", use_container_width=True):
+        if st.button("🔑 API Key", use_container_width=True):
             st.session_state.page = 'settings'
             st.rerun()
     with col3:
         if st.button("🚪 Logout", use_container_width=True):
-            st.session_state.access_token = None
-            st.session_state.user = None
+            st.session_state.user_id = None
+            st.session_state.user_email = None
             st.session_state.page = 'home'
             st.rerun()
 
     st.divider()
 
-    # Fetch novels
-    response = api_request("GET", "/api/novels/")
-    if response is None:
-        return
-
-    novels = response.get('novels', [])
-
+    novels = db_list_novels(st.session_state.user_id)
     if not novels:
-        st.info("You haven't created any graphic novels yet. Click 'New Novel' to get started!")
+        st.info("No graphic novels yet. Click 'New Novel' to get started!")
         return
 
-    # Display novels as a simple list
     for novel in novels:
-        with st.container():
-            col1, col2, col3 = st.columns([3, 1, 1])
-
-            with col1:
-                status_icon = "✅" if novel['status'] == 'completed' else "⏳" if novel['status'] == 'processing' else "❌"
-                st.write(f"**{status_icon} {novel['title']}**")
-                st.caption(f"{novel['art_style'] or 'Unknown style'} • {novel.get('page_count', '?')} pages • {novel['created_at'][:10] if novel.get('created_at') else 'Unknown date'}")
-
-            with col2:
-                if novel['has_pdf']:
-                    if st.button("📄 PDF", key=f"pdf_{novel['id']}"):
-                        url_response = api_request("GET", f"/api/novels/{novel['id']}/download/pdf")
-                        if url_response:
-                            st.markdown(f"[Download PDF]({url_response['download_url']})")
-
-            with col3:
-                if st.button("🗑️", key=f"del_{novel['id']}"):
-                    delete_response = api_request("DELETE", f"/api/novels/{novel['id']}")
-                    if delete_response:
-                        st.success("Deleted!")
-                        st.rerun()
-
-            st.divider()
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            icon = "✅" if novel['status'] == 'completed' else "⏳" if novel['status'] == 'processing' else "❌"
+            st.write(f"**{icon} {novel['title']}**")
+            st.caption(f"{novel['art_style'] or '?'} • {novel.get('page_count', '?')} pages")
+        with col2:
+            if st.button("🗑️", key=f"del_{novel['id']}"):
+                db_delete_novel(novel['id'], st.session_state.user_id)
+                st.rerun()
+        st.divider()
 
 
 def render_settings_page():
-    """Render the API key settings page."""
+    """API key settings."""
     st.title("🔑 API Key Settings")
 
-    # Check current API key status
-    status_response = api_request("GET", "/api/auth/api-key")
+    has_key = db_has_api_key(st.session_state.user_id)
 
-    if status_response and status_response.get('has_api_key'):
+    if has_key:
         st.success("You have a Gemini API key saved.")
         if st.button("🗑️ Delete Saved API Key"):
-            delete_response = api_request("DELETE", "/api/auth/api-key")
-            if delete_response:
-                st.success("API key deleted")
-                st.rerun()
+            db_delete_api_key(st.session_state.user_id)
+            st.rerun()
     else:
-        st.info("No API key saved. You'll need to enter it each time, or save one below.")
+        st.info("No API key saved.")
 
     st.divider()
-    st.subheader("Save New API Key")
-
     with st.form("api_key_form"):
         api_key = st.text_input("Gemini API Key", type="password")
-        submitted = st.form_submit_button("Save API Key", use_container_width=True)
-
-        if submitted and api_key:
-            response = api_request("PUT", "/api/auth/api-key", json={"api_key": api_key})
-            if response:
-                st.success("API key saved securely!")
+        if st.form_submit_button("Save API Key", use_container_width=True):
+            if api_key:
+                db_save_api_key(st.session_state.user_id, api_key)
+                st.success("Saved!")
                 st.rerun()
-
-    with st.expander("How to get a Gemini API key", expanded=False):
-        st.markdown("""
-        **Getting your key:**
-        1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-        2. Sign in with your Google account
-        3. Click **"Create API Key"**
-        4. Copy the key and paste it above
-        """)
 
     st.divider()
     if st.button("← Back to Dashboard", use_container_width=True):
@@ -356,256 +458,105 @@ def render_settings_page():
 
 
 def render_generate_page():
-    """Render the generation page."""
-    st.title("📚 Illustrative AI: Graphic Novel Engine")
-    st.caption("Transform public domain literature into graphic novels using AI")
+    """Generation page."""
+    st.title("📚 Illustrative AI")
+    st.caption("Transform literature into graphic novels")
 
-    # Back button
     if is_logged_in():
-        if st.button("← Back to Dashboard"):
+        if st.button("← Dashboard"):
             st.session_state.page = 'dashboard'
             st.rerun()
 
-    # --- API Key Input ---
     st.subheader("1. API Key")
+    saved_key = db_get_api_key(st.session_state.user_id) if is_logged_in() else None
 
-    # Check if user has saved API key
-    has_saved_key = False
-    if is_logged_in():
-        status_response = api_request("GET", "/api/auth/api-key")
-        has_saved_key = status_response and status_response.get('has_api_key')
-
-    if has_saved_key:
-        st.success("Using your saved API key")
-        api_key = "SAVED"  # Placeholder - actual key fetched server-side
+    if saved_key:
+        st.success("Using saved API key")
+        api_key = saved_key
     else:
-        with st.expander("How to get a Gemini API key", expanded=False):
-            st.markdown("""
-            **Getting your key:**
-            1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-            2. Sign in with your Google account
-            3. Click **"Create API Key"**
-            4. Copy the key and paste it below
-
-            **Pricing:** The Gemini API has a free tier with generous limits.
-            """)
-
-        api_key = st.text_input(
-            "Gemini API Key",
-            type="password",
-            value=st.session_state.api_key,
-            placeholder="Paste your API key here..."
-        )
+        api_key = st.text_input("Gemini API Key", type="password", value=st.session_state.api_key)
         st.session_state.api_key = api_key
 
-        st.caption("🔒 Your API key is **never stored** unless you save it in settings.")
-
-    # --- File Upload ---
     st.subheader("2. Upload Manuscript")
-    uploaded_file = st.file_uploader(
-        "Choose a text file (.txt)",
-        type=["txt"],
-        help="Upload a public domain text file to adapt into a graphic novel"
-    )
+    uploaded_file = st.file_uploader("Choose a .txt file", type=["txt"])
 
     if uploaded_file:
-        # Save file to disk
         input_path = Path("assets/input") / uploaded_file.name
         input_path.parent.mkdir(parents=True, exist_ok=True)
-
         with open(input_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        st.session_state.input_path = str(input_path)
-
-        # Calculate word count
         content = uploaded_file.getvalue().decode('utf-8')
         word_count = len(content.split())
-        st.session_state.word_count = word_count
-
         st.success(f"Loaded: {uploaded_file.name} ({word_count:,} words)")
 
-        # --- Page Mode Selection ---
         st.subheader("3. Configuration")
+        page_mode = st.radio("Pages", ["Quick Preview (10)", "Auto"], horizontal=True)
 
-        page_mode = st.radio(
-            "Page Count",
-            ["Quick Preview (10 pages)", "Auto (recommended)"],
-            horizontal=True,
-            help="Quick Preview is faster for testing. Auto calculates based on book length."
-        )
-
-        # Show recommendation for Auto mode
         if page_mode.startswith("Auto"):
             page_calc = calculate_page_count(word_count)
-            st.info(f"📄 Recommended: **{page_calc['recommended']} pages** (~{page_calc['estimated_time_minutes']} min)")
+            st.info(f"Recommended: {page_calc['recommended']} pages")
 
-        # --- Style & Tone ---
         col1, col2 = st.columns(2)
         with col1:
-            style = st.selectbox("Art Style", ART_STYLES, index=0)
+            style = st.selectbox("Art Style", ART_STYLES)
         with col2:
-            tone = st.selectbox("Narrative Tone", NARRATIVE_TONES, index=0)
+            tone = st.selectbox("Tone", NARRATIVE_TONES)
 
         st.divider()
 
-        # --- Generate Button ---
-        can_run = bool(api_key) and not st.session_state.is_running
-
-        if not api_key:
-            st.warning("Please enter your Gemini API key above to continue.")
-
-        if st.button(
-            "🚀 Generate Graphic Novel",
-            type="primary",
-            disabled=not can_run,
-            use_container_width=True
-        ):
+        if st.button("🚀 Generate", type="primary", disabled=not api_key or st.session_state.is_running, use_container_width=True):
             st.session_state.is_running = True
-            st.session_state.pipeline_complete = False
+            config.gemini_api_key = api_key
 
-            # Get actual API key for logged-in users with saved key
-            actual_api_key = api_key
-            if is_logged_in() and api_key == "SAVED":
-                # We need to fetch the key from the user's profile via the API
-                # For now, we'll use the session key or require manual entry
-                st.error("Server-side API key retrieval not yet implemented. Please enter key manually.")
-                st.session_state.is_running = False
-                st.stop()
-
-            # Inject API key into config for the agents
-            config.gemini_api_key = actual_api_key
-
-            # Create novel record if logged in
-            novel_id = None
+            target_pages = 10 if page_mode.startswith("Quick") else page_calc['recommended']
+            test_mode = page_mode.startswith("Quick")
             title = Path(input_path).stem.replace("-", " ").replace("_", " ").title()
 
+            novel_id = None
             if is_logged_in():
-                novel_response = api_request("POST", "/api/novels/", json={
-                    "title": title,
-                    "source_filename": uploaded_file.name,
-                    "art_style": style,
-                    "narrative_tone": tone,
-                    "page_count": 10 if page_mode.startswith("Quick") else page_calc['recommended'],
-                })
-                if novel_response:
-                    novel_id = novel_response['id']
-                    st.session_state.current_novel_id = novel_id
+                novel_id = db_create_novel(st.session_state.user_id, title, uploaded_file.name, style, tone, target_pages)
 
-            # Determine target pages
-            if page_mode.startswith("Quick"):
-                target_pages = 10
-                test_mode = True
-            else:
-                page_calc = calculate_page_count(word_count)
-                target_pages = page_calc['recommended']
-                test_mode = False
-
-            # Run pipeline
-            with st.status("🚀 Running pipeline...", expanded=True) as status:
+            with st.status("🚀 Running...", expanded=True) as status:
                 try:
-                    run_async(execute_pipeline(
-                        status=status,
-                        input_path=str(input_path),
-                        style=style,
-                        tone=tone,
-                        target_pages=target_pages,
-                        test_mode=test_mode,
-                        novel_id=novel_id
-                    ))
-
-                    status.update(label="✅ Pipeline Complete!", state="complete")
+                    run_async(execute_pipeline(status, str(input_path), style, tone, target_pages, test_mode, novel_id))
+                    status.update(label="✅ Complete!", state="complete")
                     st.session_state.pipeline_complete = True
-
-                    # Update novel status if logged in
                     if novel_id:
-                        output_paths = st.session_state.output_paths
-                        api_request("PATCH", f"/api/novels/{novel_id}", json={
-                            "status": "completed",
-                            "pdf_storage_key": output_paths.get('pdf_storage_key'),
-                            "epub_storage_key": output_paths.get('epub_storage_key'),
-                        })
-
+                        db_update_novel(novel_id, status="completed",
+                                       pdf_storage_key=st.session_state.output_paths.get('pdf_storage_key'),
+                                       epub_storage_key=st.session_state.output_paths.get('epub_storage_key'))
                 except Exception as e:
-                    status.update(label=f"❌ Error: {str(e)[:50]}...", state="error")
-                    st.error(f"Pipeline failed: {e}")
-                    st.info("Check your API key and try again.")
-
-                    # Update novel status to failed
+                    status.update(label=f"❌ Error", state="error")
+                    st.error(str(e))
                     if novel_id:
-                        api_request("PATCH", f"/api/novels/{novel_id}", json={"status": "failed"})
-
+                        db_update_novel(novel_id, status="failed")
                 finally:
                     st.session_state.is_running = False
 
-    # --- Download Section ---
     if st.session_state.pipeline_complete and st.session_state.output_paths:
         st.divider()
-        st.subheader("📦 Download Your Graphic Novel")
-        st.success("Your graphic novel is ready!")
-
-        output_info = st.session_state.output_paths
-        input_stem = output_info.get('input_stem', 'novel')
-        pdf_path = output_info.get('pdf_path')
-        epub_path = output_info.get('epub_path')
+        st.subheader("📦 Download")
+        pdf_path = st.session_state.output_paths.get('pdf_path')
+        epub_path = st.session_state.output_paths.get('epub_path')
+        input_stem = st.session_state.output_paths.get('input_stem', 'novel')
 
         col1, col2 = st.columns(2)
-
         with col1:
             if pdf_path and Path(pdf_path).exists():
                 with open(pdf_path, "rb") as f:
-                    st.download_button(
-                        label="📄 Download PDF",
-                        data=f.read(),
-                        file_name=f"{input_stem}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-            else:
-                st.warning("PDF not available")
-
+                    st.download_button("📄 PDF", f.read(), f"{input_stem}.pdf", "application/pdf", use_container_width=True)
         with col2:
             if epub_path and Path(epub_path).exists():
                 with open(epub_path, "rb") as f:
-                    st.download_button(
-                        label="📚 Download EPUB",
-                        data=f.read(),
-                        file_name=f"{input_stem}.epub",
-                        mime="application/epub+zip",
-                        use_container_width=True
-                    )
-            else:
-                st.warning("EPUB not available")
-
-        st.divider()
-        if st.button("🔄 Start New Project", use_container_width=True):
-            # Reset state
-            st.session_state.pipeline_complete = False
-            st.session_state.output_paths = {}
-            st.session_state.input_path = None
-            st.session_state.current_novel_id = None
-            st.rerun()
+                    st.download_button("📚 EPUB", f.read(), f"{input_stem}.epub", "application/epub+zip", use_container_width=True)
 
 
 def render_home_page():
-    """Render the home/landing page."""
+    """Home page."""
     st.title("📚 Illustrative AI")
     st.subheader("Transform Literature into Graphic Novels")
-
-    st.markdown("""
-    **Illustrative AI** uses advanced AI to transform public domain literature
-    into beautifully illustrated graphic novels.
-
-    ---
-
-    **Features:**
-    - Upload any public domain text
-    - Choose from multiple art styles
-    - AI-generated consistent character designs
-    - Export to PDF and EPUB
-
-    ---
-    """)
+    st.markdown("AI-powered graphic novel generation from public domain texts.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -620,8 +571,6 @@ def render_home_page():
 
 def main():
     init_session_state()
-
-    # Route to appropriate page
     page = st.session_state.page
 
     if page == 'home':
