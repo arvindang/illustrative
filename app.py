@@ -14,6 +14,13 @@ from config import config
 # Page Configuration
 st.set_page_config(page_title="Illustrative AI", page_icon="📚", layout="centered")
 
+# Hide Streamlit's hamburger menu
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
+
 # Database imports (direct access, no separate API needed)
 from sqlalchemy.orm import Session
 from models.base import SessionLocal, engine, Base
