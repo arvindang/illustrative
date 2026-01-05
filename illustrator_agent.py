@@ -174,7 +174,7 @@ class IllustratorAgent:
                 if part.inline_data:
                     img = part.as_image()
                     path = char_folder / f"ref_{i}.png"
-                    img.save(path, optimize=True)
+                    img.save(path, format="PNG", optimize=True)
                     paths.append(str(path))
 
             # Save metadata
@@ -263,7 +263,7 @@ class IllustratorAgent:
                 if part.inline_data:
                     img = part.as_image()
                     path = obj_folder / f"ref_{i}.png"
-                    img.save(path, optimize=True)
+                    img.save(path, format="PNG", optimize=True)
                     paths.append(str(path))
 
             # Save metadata
@@ -573,7 +573,7 @@ class IllustratorAgent:
                 if part.inline_data:
                     img = part.as_image()
                     output_path = page_dir / f"panel_{panel_id}.png"
-                    img.save(output_path, optimize=True)
+                    img.save(output_path, format="PNG", optimize=True)
                     print(f"   ✅ Saved: {output_path} (via {self.current_model})")
 
                     # Mark as complete in manifest
