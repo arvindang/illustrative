@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import re
 import textwrap
@@ -9,6 +10,7 @@ from google import genai
 from google.genai import types
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
 from ebooklib import epub
 from config import config
 
@@ -131,7 +133,7 @@ class CompositorAgent:
         available_height = max_height - (padding * 2)
 
         font_size = config.font_size
-        min_font_size = 28  # Don't go smaller than this
+        min_font_size = 16  # Don't go smaller than this (scaled for 1200x1600 pages)
 
         temp_img = Image.new('RGB', (1, 1))
         draw = ImageDraw.Draw(temp_img)
@@ -663,9 +665,9 @@ class CompositorAgent:
             except Exception as e:
                 print(f"❌ Error processing Panel {panel_id}: {e}")
 
-        # Save the final page
+        # Save the final page with PNG optimization
         output_path = self.output_dir / f"page_{page_num}.png"
-        canvas.save(output_path)
+        canvas.save(output_path, optimize=True)
         print(f"✅ Page {page_num} saved to {output_path}")
 
     def get_sorted_images(self):
@@ -675,7 +677,7 @@ class CompositorAgent:
         return images
 
     def export_pdf(self, output_path: Path):
-        """Bundles images into a PDF."""
+        """Bundles images into a PDF with JPEG compression for smaller file sizes."""
         images = self.get_sorted_images()
         if not images:
             print("⚠️ No images found to export to PDF.")
@@ -689,7 +691,13 @@ class CompositorAgent:
         c = pdf_canvas.Canvas(str(pdf_path), pagesize=(img_w, img_h))
 
         for img_path in images:
-            c.drawImage(str(img_path), 0, 0, width=img_w, height=img_h)
+            # Convert to JPEG in memory for better compression
+            with Image.open(img_path) as img:
+                rgb_img = img.convert("RGB")
+                buffer = io.BytesIO()
+                rgb_img.save(buffer, format="JPEG", quality=85, optimize=True)
+                buffer.seek(0)
+                c.drawImage(ImageReader(buffer), 0, 0, width=img_w, height=img_h)
             c.showPage()
 
         c.save()
@@ -697,7 +705,7 @@ class CompositorAgent:
         return pdf_path
 
     def export_epub(self, output_path: Path, title="Graphic Novel", author="Illustrate AI"):
-        """Bundles images into a Fixed-Layout EPUB 3."""
+        """Bundles images into a Fixed-Layout EPUB 3 with JPEG compression."""
         images = self.get_sorted_images()
         if not images:
             print("⚠️ No images found to export to EPUB.")
@@ -722,11 +730,16 @@ class CompositorAgent:
         for i, img_path in enumerate(images):
             page_num = i + 1
 
-            with open(img_path, 'rb') as f:
-                img_content = f.read()
+            # Convert to JPEG for better compression
+            with Image.open(img_path) as img:
+                rgb_img = img.convert("RGB")
+                buffer = io.BytesIO()
+                rgb_img.save(buffer, format="JPEG", quality=85, optimize=True)
+                img_content = buffer.getvalue()
 
             epub_img = epub.EpubImage()
-            epub_img.file_name = f'images/page_{page_num}.png'
+            epub_img.file_name = f'images/page_{page_num}.jpg'
+            epub_img.media_type = 'image/jpeg'
             epub_img.content = img_content
             book.add_item(epub_img)
 
@@ -735,14 +748,14 @@ class CompositorAgent:
             <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                 <head>
                     <title>Page {page_num}</title>
-                    <meta name="viewport" content="width=2400, height=3200"/>
+                    <meta name="viewport" content="width=1200, height=1600"/>
                     <style>
                         body {{ margin: 0; padding: 0; background-color: #FFFFFF; }}
                         img {{ width: 100%; height: 100%; display: block; }}
                     </style>
                 </head>
                 <body>
-                    <img src="../images/page_{page_num}.png" alt="Page {page_num}"/>
+                    <img src="../images/page_{page_num}.jpg" alt="Page {page_num}"/>
                 </body>
             </html>
             """

@@ -157,13 +157,13 @@ class IllustratorAgent:
             if response is None:
                 raise last_error or Exception(f"All image models failed for {name}")
 
-            # Save images
+            # Save images with PNG optimization
             paths = []
             for i, part in enumerate(response.parts):
                 if part.inline_data:
                     img = part.as_image()
                     path = char_folder / f"ref_{i}.png"
-                    img.save(path)
+                    img.save(path, optimize=True)
                     paths.append(str(path))
 
             # Save metadata
@@ -238,13 +238,13 @@ class IllustratorAgent:
             if response is None:
                 raise last_error or Exception(f"All image models failed for {name}")
 
-            # Save images
+            # Save images with PNG optimization
             paths = []
             for i, part in enumerate(response.parts):
                 if part.inline_data:
                     img = part.as_image()
                     path = obj_folder / f"ref_{i}.png"
-                    img.save(path)
+                    img.save(path, optimize=True)
                     paths.append(str(path))
 
             # Save metadata
@@ -544,7 +544,7 @@ class IllustratorAgent:
                 if part.inline_data:
                     img = part.as_image()
                     output_path = page_dir / f"panel_{panel_id}.png"
-                    img.save(output_path)
+                    img.save(output_path, optimize=True)
                     print(f"   ✅ Saved: {output_path} (via {self.current_model})")
 
                     # Mark as complete in manifest
