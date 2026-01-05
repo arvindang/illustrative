@@ -355,8 +355,8 @@ def render_login_page():
             st.session_state.page = 'register'
             st.rerun()
     with col2:
-        if st.button("Continue as Guest", use_container_width=True):
-            st.session_state.page = 'generate'
+        if st.button("← Back to Home", use_container_width=True):
+            st.session_state.page = 'home'
             st.rerun()
 
 
@@ -387,9 +387,15 @@ def render_register_page():
                     st.error(msg)
 
     st.divider()
-    if st.button("← Back to Login", use_container_width=True):
-        st.session_state.page = 'login'
-        st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("← Back to Home", use_container_width=True):
+            st.session_state.page = 'home'
+            st.rerun()
+    with col2:
+        if st.button("Already have an account?", use_container_width=True):
+            st.session_state.page = 'login'
+            st.rerun()
 
 
 def render_dashboard():
@@ -563,16 +569,61 @@ def render_home_page():
     """Home page."""
     st.title("📚 Illustrative AI")
     st.subheader("Transform Literature into Graphic Novels")
-    st.markdown("AI-powered graphic novel generation from public domain texts.")
 
+    st.markdown("""
+Transform royalty-free books from [Project Gutenberg](https://www.gutenberg.org/) and other public domain sources
+into beautifully illustrated graphic novels using **Google Gemini 3** and **Nano Banana**.
+    """)
+
+    st.divider()
+
+    # How it works section
+    st.markdown("### How It Works")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**1. Upload**")
+        st.caption("Upload any public domain book as a .txt file")
+    with col2:
+        st.markdown("**2. Customize**")
+        st.caption("Choose your art style and narrative tone")
+    with col3:
+        st.markdown("**3. Generate**")
+        st.caption("AI creates scripts, illustrations, and layouts")
+
+    st.divider()
+
+    # Features section
+    st.markdown("### Features")
+    st.markdown("""
+- **Multi-style artwork**: Choose from manga, comic book, watercolor, and more
+- **Consistent characters**: AI maintains character appearance across all panels
+- **Automated layout**: Dynamic page compositions with speech bubbles and captions
+- **Export options**: Download as PDF or EPUB
+    """)
+
+    st.divider()
+
+    # API Key info
+    st.markdown("### Bring Your Own API Key")
+    st.info("""
+This app requires a **Google Gemini API key** to generate graphic novels.
+
+Get your free API key at [Google AI Studio](https://aistudio.google.com/apikey).
+Your key is encrypted and stored securely when you create an account.
+    """)
+
+    st.divider()
+
+    # Auth buttons
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🔐 Login", use_container_width=True, type="primary"):
             st.session_state.page = 'login'
             st.rerun()
     with col2:
-        if st.button("🎨 Try as Guest", use_container_width=True):
-            st.session_state.page = 'generate'
+        if st.button("📝 Create Account", use_container_width=True):
+            st.session_state.page = 'register'
             st.rerun()
 
 
