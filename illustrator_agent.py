@@ -9,7 +9,10 @@ load_dotenv()
 
 from google import genai
 from google.genai import types
-from utils import retry_with_backoff, RateLimiter, ProductionManifest
+from utils import (
+    retry_with_backoff, RateLimiter, ProductionManifest,
+    get_tpm_limiter, estimate_tokens_for_image, extract_token_usage
+)
 from config import config
 
 # Lazy client initialization for runtime API key support
@@ -124,6 +127,10 @@ class IllustratorAgent:
             description = char_data.get('description', '')
             img_prompt = f"Character sheet for {name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
 
+            # Acquire TPM capacity for character reference generation
+            estimated_tokens = estimate_tokens_for_image(img_prompt, num_reference_images=0)
+            await get_tpm_limiter().acquire(estimated_tokens)
+
             # Three-tier fallback
             models_to_try = [
                 config.image_model_primary,
@@ -156,6 +163,10 @@ class IllustratorAgent:
 
             if response is None:
                 raise last_error or Exception(f"All image models failed for {name}")
+
+            # Update TPM with actual usage
+            input_tokens, output_tokens = extract_token_usage(response)
+            get_tpm_limiter().update_actual_usage(estimated_tokens, input_tokens + output_tokens)
 
             # Save images with PNG optimization
             paths = []
@@ -205,6 +216,10 @@ class IllustratorAgent:
 
             img_prompt = f"Concept art sheet for {name}. {description}. {features_str}. Show: 1. Full view. 2. Detail close-up. 3. Alternate angle. Style: {style}. White background. Clean lines."
 
+            # Acquire TPM capacity for object reference generation
+            obj_estimated_tokens = estimate_tokens_for_image(img_prompt, num_reference_images=0)
+            await get_tpm_limiter().acquire(obj_estimated_tokens)
+
             # Three-tier fallback
             models_to_try = [
                 config.image_model_primary,
@@ -237,6 +252,10 @@ class IllustratorAgent:
 
             if response is None:
                 raise last_error or Exception(f"All image models failed for {name}")
+
+            # Update TPM with actual usage
+            obj_input, obj_output = extract_token_usage(response)
+            get_tpm_limiter().update_actual_usage(obj_estimated_tokens, obj_input + obj_output)
 
             # Save images with PNG optimization
             paths = []
@@ -508,6 +527,12 @@ class IllustratorAgent:
             if objects_included:
                 print(f"   (Including refs for Objects: {', '.join(objects_included)})")
 
+            # Acquire TPM capacity for panel generation
+            # Count reference images (everything after the prompt in input_contents)
+            num_ref_images = len(input_contents) - 1
+            panel_estimated_tokens = estimate_tokens_for_image(master_prompt, num_reference_images=num_ref_images)
+            await get_tpm_limiter().acquire(panel_estimated_tokens)
+
             # 3. Call the API with Three-Tier Fallback Logic
             models_to_try = [
                 config.image_model_primary,
@@ -535,6 +560,10 @@ class IllustratorAgent:
 
             if response is None:
                 raise last_error or Exception("All image models failed")
+
+            # Update TPM with actual usage
+            panel_input, panel_output = extract_token_usage(response)
+            get_tpm_limiter().update_actual_usage(panel_estimated_tokens, panel_input + panel_output)
 
             # 4. Save the output
             page_dir = self.output_base_dir / f"page_{page_num}"
