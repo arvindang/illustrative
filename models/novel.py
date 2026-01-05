@@ -25,6 +25,7 @@ class GraphicNovel(Base):
 
     # Status: processing, completed, failed
     status = Column(String(50), default="processing", index=True)
+    error_message = Column(String(2000), nullable=True)
 
     # Storage keys for S3 bucket
     pdf_storage_key = Column(String(512), nullable=True)
@@ -47,8 +48,11 @@ class GraphicNovel(Base):
             "narrative_tone": self.narrative_tone,
             "page_count": self.page_count,
             "status": self.status,
+            "error_message": self.error_message,
             "has_pdf": self.pdf_storage_key is not None,
             "has_epub": self.epub_storage_key is not None,
+            "pdf_storage_key": self.pdf_storage_key,
+            "epub_storage_key": self.epub_storage_key,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
