@@ -9,7 +9,8 @@ from illustrator_agent import IllustratorAgent
 from compositor_agent import CompositorAgent
 from constants import ART_STYLES
 from utils import calculate_page_count
-from config import config
+from config import config, ERA_CONSTRAINTS
+from storage.bucket import BucketStorage
 
 # Page Configuration
 st.set_page_config(page_title="Illustrative AI", page_icon="📚", layout="centered")
@@ -53,7 +54,7 @@ def get_db() -> Optional[Session]:
 def init_session_state():
     """Initialize session state variables."""
     # Read page from URL query params for initial load
-    valid_pages = {'home', 'login', 'register', 'dashboard', 'settings', 'generate'}
+    valid_pages = {'home', 'login', 'register', 'dashboard', 'settings', 'generate', 'novel_detail'}
     url_page = st.query_params.get("page", "home")
     initial_page = url_page if url_page in valid_pages else 'home'
 
@@ -282,6 +283,32 @@ def db_delete_novel(novel_id: str, user_id: str) -> bool:
         return False
 
 
+def db_get_novel(novel_id: str, user_id: str) -> Optional[dict]:
+    """Get a single novel by ID."""
+    db = get_db()
+    if db is None:
+        return None
+    try:
+        novel = db.query(GraphicNovel).filter(
+            GraphicNovel.id == novel_id, GraphicNovel.user_id == user_id
+        ).first()
+        result = novel.to_dict() if novel else None
+        db.close()
+        return result
+    except Exception:
+        db.close()
+        return None
+
+
+def get_download_url(storage_key: str) -> Optional[str]:
+    """Generate a presigned download URL for a storage key."""
+    try:
+        storage = BucketStorage()
+        return storage.generate_presigned_url(storage_key, expiration=3600)
+    except Exception:
+        return None
+
+
 def run_async(coro):
     """Run an async coroutine."""
     loop = asyncio.new_event_loop()
@@ -292,27 +319,45 @@ def run_async(coro):
         loop.close()
 
 
-async def execute_pipeline(status, input_path: str, style: str, target_pages: int, test_mode: bool, novel_id: str = None):
+async def execute_pipeline(status, input_path: str, style: str, target_pages: int, test_mode: bool, novel_id: str = None, context_constraints: str = ""):
     """Execute the full pipeline."""
     input_stem = Path(input_path).stem
 
+    # Create isolated output directory
+    user_id = st.session_state.get('user_id')
+    if user_id and novel_id:
+        base_output_dir = Path("assets/output") / str(user_id) / str(novel_id)
+    elif novel_id:
+        base_output_dir = Path("assets/output") / "anonymous" / str(novel_id)
+    else:
+        # Fallback for temporary runs
+        import uuid
+        run_id = str(uuid.uuid4())
+        base_output_dir = Path("assets/output") / "temp" / run_id
+
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    status.write(f"📂 Output directory: {base_output_dir}")
+
     status.write("--- STEP 1/4: SCRIPTING ---")
     status.write("📚 Loading manuscript...")
-    scripter = ScriptingAgent(input_path)
+    scripter = ScriptingAgent(input_path, base_output_dir=base_output_dir)
+
+    if context_constraints:
+        status.write(f"🕰️ Era constraints active: {context_constraints[:80]}...")
 
     status.write("💾 Caching book content...")
     script = await scripter.generate_script(
-        style=style, test_mode=test_mode, target_page_override=target_pages
+        style=style, test_mode=test_mode, context_constraints=context_constraints, target_page_override=target_pages
     )
     status.write(f"✅ Script complete: {len(script)} pages generated")
 
     suffix = "_test_page.json" if test_mode else "_full_script.json"
-    script_path = Path("assets/output") / f"{input_stem}{suffix}"
+    script_path = base_output_dir / f"{input_stem}{suffix}"
 
     status.write("")
     status.write("--- STEP 2/4: ILLUSTRATION ---")
     style_prompt = f"{style} style, high-quality graphic novel art."
-    illustrator = IllustratorAgent(str(script_path), style_prompt)
+    illustrator = IllustratorAgent(str(script_path), style_prompt, base_output_dir=base_output_dir)
 
     status.write("🎨 Generating character & object reference sheets...")
     await illustrator.generate_all_references(style=style)
@@ -324,13 +369,13 @@ async def execute_pipeline(status, input_path: str, style: str, target_pages: in
     status.write("")
     status.write("--- STEP 3/4: COMPOSITION ---")
     status.write("📐 Assembling final pages...")
-    compositor = CompositorAgent(str(script_path))
+    compositor = CompositorAgent(str(script_path), base_output_dir=base_output_dir)
     compositor.run()
     status.write("✅ Composition complete!")
 
     status.write("")
     status.write("--- STEP 4/4: EXPORT ---")
-    output_base = Path("assets/output") / input_stem
+    output_base = base_output_dir / input_stem
     title = input_stem.replace("-", " ").replace("_", " ").title()
 
     if novel_id:
@@ -454,7 +499,9 @@ def render_dashboard():
         col1, col2 = st.columns([4, 1])
         with col1:
             icon = "✅" if novel['status'] == 'completed' else "⏳" if novel['status'] == 'processing' else "❌"
-            st.write(f"**{icon} {novel['title']}**")
+            if st.button(f"{icon} {novel['title']}", key=f"view_{novel['id']}", type="tertiary"):
+                st.query_params["novel_id"] = novel['id']
+                navigate_to('novel_detail')
             st.caption(f"{novel['art_style'] or '?'} • {novel.get('page_count', '?')} pages")
         with col2:
             if st.button("🗑️", key=f"del_{novel['id']}"):
@@ -493,6 +540,98 @@ def render_settings_page():
 
     if st.button("← Back to Dashboard", use_container_width=True):
         navigate_to('dashboard')
+
+
+def render_novel_detail_page():
+    """Novel detail/show page."""
+    novel_id = st.query_params.get("novel_id")
+
+    if not novel_id:
+        st.error("No novel specified")
+        if st.button("← Back to Dashboard"):
+            navigate_to('dashboard')
+        return
+
+    novel = db_get_novel(novel_id, st.session_state.user_id)
+
+    if not novel:
+        st.error("Novel not found")
+        if st.button("← Back to Dashboard"):
+            navigate_to('dashboard')
+        return
+
+    # Header with back button
+    if st.button("← Back to Dashboard"):
+        navigate_to('dashboard')
+
+    st.title(novel['title'])
+
+    # Status badge
+    status = novel['status']
+    if status == 'completed':
+        st.success("Completed")
+    elif status == 'processing':
+        st.info("Processing...")
+    else:
+        st.error("Failed")
+
+    # Metadata
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Art Style**")
+        st.write(novel['art_style'] or "Not specified")
+        st.markdown("**Pages**")
+        st.write(novel['page_count'] or "Unknown")
+    with col2:
+        st.markdown("**Source File**")
+        st.write(novel['source_filename'] or "Unknown")
+        st.markdown("**Created**")
+        if novel['created_at']:
+            from datetime import datetime
+            created = datetime.fromisoformat(novel['created_at'].replace('Z', '+00:00'))
+            st.write(created.strftime("%B %d, %Y at %I:%M %p"))
+        else:
+            st.write("Unknown")
+
+    # Error message for failed runs
+    if status == 'failed' and novel.get('error_message'):
+        st.divider()
+        st.markdown("**Error Details**")
+        st.error(novel['error_message'])
+
+    # Downloads (show for completed novels)
+    if status == 'completed':
+        st.divider()
+        st.subheader("Downloads")
+
+        if novel['has_pdf'] or novel['has_epub']:
+            col1, col2 = st.columns(2)
+            with col1:
+                if novel['has_pdf'] and novel.get('pdf_storage_key'):
+                    pdf_url = get_download_url(novel['pdf_storage_key'])
+                    if pdf_url:
+                        st.link_button("Download PDF", pdf_url, use_container_width=True)
+                    else:
+                        st.button("PDF unavailable", disabled=True, use_container_width=True)
+            with col2:
+                if novel['has_epub'] and novel.get('epub_storage_key'):
+                    epub_url = get_download_url(novel['epub_storage_key'])
+                    if epub_url:
+                        st.link_button("Download EPUB", epub_url, use_container_width=True)
+                    else:
+                        st.button("EPUB unavailable", disabled=True, use_container_width=True)
+        else:
+            st.info("No downloads available. This run completed before cloud storage was configured, or files were not uploaded.")
+
+    # Delete action
+    st.divider()
+    with st.expander("Danger Zone"):
+        if st.button("Delete this novel", type="secondary"):
+            db_delete_novel(novel_id, st.session_state.user_id)
+            navigate_to('dashboard')
+
+    render_feedback_link()
 
 
 def render_generate_page():
@@ -536,6 +675,25 @@ def render_generate_page():
 
         style = st.selectbox("Art Style", ART_STYLES)
 
+        # Era/Historical Period Constraints
+        st.subheader("4. Historical Era (Optional)")
+        st.caption("Select an era to ensure period-accurate costumes, technology, and props")
+        era_options = list(ERA_CONSTRAINTS.keys())
+        selected_era = st.selectbox("Era Preset", ["None (auto-detect from text)"] + era_options)
+
+        # Custom era text area
+        context_constraints = ""
+        if selected_era == "Custom (Enter Below)":
+            context_constraints = st.text_area(
+                "Custom Era Constraints",
+                placeholder="e.g., Setting: 1890s London. CLOTHING: Victorian era dress. TECHNOLOGY: Gas lamps, horse-drawn carriages...",
+                height=150
+            )
+        elif selected_era != "None (auto-detect from text)":
+            context_constraints = ERA_CONSTRAINTS.get(selected_era, "")
+            with st.expander("View era constraints"):
+                st.text(context_constraints)
+
         st.divider()
 
         if st.button("🚀 Generate", type="primary", disabled=not api_key or st.session_state.is_running, use_container_width=True):
@@ -552,7 +710,7 @@ def render_generate_page():
 
             with st.status("🚀 Running...", expanded=True) as status:
                 try:
-                    run_async(execute_pipeline(status, str(input_path), style, target_pages, test_mode, novel_id))
+                    run_async(execute_pipeline(status, str(input_path), style, target_pages, test_mode, novel_id, context_constraints))
                     status.update(label="✅ Complete!", state="complete")
                     st.session_state.pipeline_complete = True
                     if novel_id:
@@ -561,9 +719,10 @@ def render_generate_page():
                                        epub_storage_key=st.session_state.output_paths.get('epub_storage_key'))
                 except Exception as e:
                     status.update(label=f"❌ Error", state="error")
-                    st.error(str(e))
+                    error_msg = str(e)[:2000]  # Truncate to fit column
+                    st.error(error_msg)
                     if novel_id:
-                        db_update_novel(novel_id, status="failed")
+                        db_update_novel(novel_id, status="failed", error_message=error_msg)
                 finally:
                     st.session_state.is_running = False
 
@@ -670,6 +829,10 @@ def main():
         render_settings_page()
     elif page == 'generate':
         render_generate_page()
+    elif page == 'novel_detail':
+        if not is_logged_in():
+            navigate_to('login')
+        render_novel_detail_page()
     else:
         render_home_page()
 
