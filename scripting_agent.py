@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import hashlib
@@ -34,9 +35,9 @@ def get_client():
 scribe_limiter = RateLimiter(rpm_limit=15)
 
 class ScriptingAgent:
-    def __init__(self, book_path: str):
+    def __init__(self, book_path: str, base_output_dir: Path = None):
         self.book_path = Path(book_path)
-        self.output_dir = config.output_dir
+        self.output_dir = Path(base_output_dir) if base_output_dir else config.output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.cache_name = None
 
@@ -138,154 +139,158 @@ class ScriptingAgent:
         return canonical_chars
 
     @retry_with_backoff()
-    async def generate_asset_manifest(self, cache_name: str, full_text_fallback: str, blueprint: list, style: str):
+    async def generate_asset_manifest(self, cache_name: str, full_text_fallback: str, blueprint: list, style: str, context_constraints: str = ""):
         """
         PASS 1.5: ASSET EXTRACTION
-        Generates visual descriptions for characters and key objects.
+        Generates visual descriptions for characters and key objects in a single pass.
         """
         # Extract unique characters from blueprint
         characters = self.extract_characters_from_blueprint(blueprint)
         print(f"👥 Found {len(characters)} unique characters: {', '.join(characters)}")
 
-        # Generate character descriptions
-        char_prompt = f"""
-        For each of the following characters in a '{style}' graphic novel, provide:
-        1. A detailed physical description (facial features, clothing, color palette)
-        2. Age range (e.g., "mid-30s", "elderly", "young adult")
-        3. Occupation or role (e.g., "Sea Captain", "Professor")
-        4. Distinctive items they carry or wear
+        # Build era/context constraint block if provided
+        era_block = ""
+        if context_constraints:
+            era_block = f"""
+        HISTORICAL/SETTING CONSTRAINTS (CRITICAL - ALL DESIGNS MUST CONFORM):
+        {context_constraints}
 
-        Characters: {', '.join(characters)}
+        ALL character clothing, accessories, and object designs MUST be era-appropriate.
+        NO anachronistic elements (modern clothing, technology, or materials).
+        """
+
+        # Combined prompt for characters and objects
+        combined_prompt = f"""
+        Act as a Visual Development Artist for a '{style}' graphic novel.
+        {era_block}
+        PART 1: CHARACTER DESIGN
+        For each of the following characters, provide:
+        - name: Canonical name
+        - description: Detailed physical description (facial features, clothing, color palette). ALL clothing and accessories must be era-appropriate.
+        - age_range: e.g., "mid-30s", "elderly", "young adult"
+        - occupation: e.g., "Sea Captain", "Professor"
+        - distinctive_items: List of items they carry or wear (must be era-appropriate)
+        - specific_era_markers: Specific historical fashion details (e.g., "Victorian high collar", "19th-century heavy wool coat")
+
+        Characters to design: {', '.join(characters)}
+
+        PART 2: KEY OBJECTS & LOCATIONS
+        Identify the top 3-5 most important RECURRING OBJECTS, VEHICLES, or LOCATIONS (e.g., 'The Nautilus') that need consistent visual design.
+        For each, provide:
+        - name: Name of the object
+        - description: Visual description (materials, textures, colors). Must be era-appropriate.
+        - key_features: List of identifying shapes or mechanisms (era-appropriate technology)
+        - condition: The state of wear (e.g., "Pristine and polished", "Rusted and barnacle-encrusted", "Ancient and crumbling")
+        - material_context: Primary materials appropriate to the era (e.g., "Riveted iron and brass", "Bioluminescent organic matter")
 
         Be specific and visual for use in AI image generation.
         """
 
         model = config.scripting_model_global_context
-        contents = [char_prompt] if cache_name else [char_prompt, f"SOURCE BOOK:\n{full_text_fallback[:50000]}"]
+        contents = [combined_prompt] if cache_name else [combined_prompt, f"SOURCE BOOK:\n{full_text_fallback[:50000]}"]
 
-        # Acquire TPM capacity for character manifest
-        char_estimated = estimate_tokens_for_text(char_prompt)
-        await get_tpm_limiter().acquire(char_estimated)
+        # Acquire TPM capacity for combined manifest
+        estimated_tokens = estimate_tokens_for_text(combined_prompt)
+        await get_tpm_limiter().acquire(estimated_tokens)
 
-        char_response = await get_client().aio.models.generate_content(
+        response = await get_client().aio.models.generate_content(
             model=model,
             contents=contents,
             config=types.GenerateContentConfig(
                 cached_content=cache_name,
                 response_mime_type="application/json",
                 response_schema={
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "name": {"type": "STRING"},
-                            "description": {"type": "STRING"},
-                            "age_range": {"type": "STRING"},
-                            "occupation": {"type": "STRING"},
-                            "distinctive_items": {"type": "ARRAY", "items": {"type": "STRING"}}
+                    "type": "OBJECT",
+                    "properties": {
+                        "characters": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "name": {"type": "STRING"},
+                                    "description": {"type": "STRING"},
+                                    "age_range": {"type": "STRING"},
+                                    "occupation": {"type": "STRING"},
+                                    "distinctive_items": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "specific_era_markers": {"type": "STRING"}
+                                },
+                                "required": ["name", "description"]
+                            }
                         },
-                        "required": ["name", "description"]
-                    }
+                        "objects": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "name": {"type": "STRING"},
+                                    "description": {"type": "STRING"},
+                                    "key_features": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "condition": {"type": "STRING"},
+                                    "material_context": {"type": "STRING"}
+                                },
+                                "required": ["name", "description"]
+                            }
+                        }
+                    },
+                    "required": ["characters", "objects"]
                 }
             )
         )
 
-        # Update TPM with actual usage from character manifest
-        char_input, char_output = extract_token_usage(char_response)
-        get_tpm_limiter().update_actual_usage(char_estimated, char_input + char_output)
+        # Update TPM with actual usage
+        input_tokens, output_tokens = extract_token_usage(response)
+        get_tpm_limiter().update_actual_usage(estimated_tokens, input_tokens + output_tokens)
 
-        # Identify key objects
-        obj_prompt = """
-        Identify the top 3-5 most important RECURRING OBJECTS, VEHICLES, or LOCATIONS that need consistent visual design.
+        if response.parsed is None:
+            raw_text = response.text[:500] if response.text else 'empty'
+            print(f"⚠️ Asset manifest response failed to parse. Raw text: {raw_text}")
+            raise ValueError("Failed to parse combined asset manifest from API response")
 
-        Criteria:
-        1. Must appear multiple times or be central to the plot.
-        2. Must be specific (e.g., "The Nautilus", "Nemo's Organ"), not generic (e.g., "a chair").
-
-        For each, provide:
-        1. Name
-        2. Visual description (materials, textures, colors)
-        3. Key features (identifying shapes, mechanisms)
-        """
-
-        # Acquire TPM capacity for object manifest
-        obj_estimated = estimate_tokens_for_text(obj_prompt)
-        await get_tpm_limiter().acquire(obj_estimated)
-
-        obj_response = await get_client().aio.models.generate_content(
-            model=model,
-            contents=[obj_prompt] if cache_name else [obj_prompt, f"SOURCE BOOK:\n{full_text_fallback[:50000]}"],
-            config=types.GenerateContentConfig(
-                cached_content=cache_name,
-                response_mime_type="application/json",
-                response_schema={
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "name": {"type": "STRING"},
-                            "description": {"type": "STRING"},
-                            "key_features": {"type": "ARRAY", "items": {"type": "STRING"}}
-                        },
-                        "required": ["name", "description"]
-                    }
-                }
-            )
-        )
-
-        # Update TPM with actual usage from object manifest
-        obj_input, obj_output = extract_token_usage(obj_response)
-        get_tpm_limiter().update_actual_usage(obj_estimated, obj_input + obj_output)
-
-        # Validate parsed responses - .parsed returns None if JSON parsing failed
-        if char_response.parsed is None:
-            raw_text = char_response.text[:500] if char_response.text else 'empty'
-            print(f"⚠️ Character response failed to parse. Raw text: {raw_text}")
-            raise ValueError("Failed to parse character manifest from API response")
-
-        if obj_response.parsed is None:
-            raw_text = obj_response.text[:500] if obj_response.text else 'empty'
-            print(f"⚠️ Object response failed to parse. Raw text: {raw_text}")
-            raise ValueError("Failed to parse object manifest from API response")
-
-        manifest = {
-            "characters": char_response.parsed,
-            "objects": obj_response.parsed
-        }
-
-        print(f"🛠️ Found {len(manifest['objects'])} key objects")
+        manifest = response.parsed
+        print(f"🛠️ Found {len(manifest['objects'])} key objects and {len(manifest['characters'])} characters.")
         return manifest
 
     @retry_with_backoff()
-    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str):
+    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str, context_constraints: str = ""):
         """
         PASS 1: THE DIRECTOR
         Consumes the FULL BOOK (via cache) and outputs a page-by-page blueprint.
         """
         print(f"🎬 DIRECTOR PASS: Creating {target_pages}-page blueprint...")
-        
+
+        # Build era/context constraint block if provided
+        era_block = ""
+        if context_constraints:
+            era_block = f"""
+        HISTORICAL/SETTING CONSTRAINTS (CRITICAL - MUST BE FOLLOWED):
+        {context_constraints}
+
+        ALL visual descriptions, costumes, technology, vehicles, and props MUST conform to these constraints.
+        Flag any elements that would be anachronistic or out-of-place.
+        """
+
         prompt = f"""
         Act as a Master Graphic Novel Director.
-        
+
         TASK:
         Adapt the provided book into a TIGHT {target_pages}-PAGE Graphic Novel Script.
-        
-        You must output a JSON list of exactly {target_pages} items. 
+        {era_block}
+        You must output a JSON list of exactly {target_pages} items.
         Each item represents ONE PAGE and must define:
         1. 'page_number': Integer (1 to {target_pages}).
         2. 'summary': A 2-sentence summary of what happens on this page.
         3. 'focus_text': A specific quote or 200-word excerpt from the source text that this page covers.
         4. 'mood': The emotional tone (e.g., "Tense", "Melancholic").
         5. 'key_characters': List of characters present.
-        6. 'visual_notes': Specific setting or lighting notes.
+        6. 'visual_notes': Specific setting or lighting notes. Include era-appropriate details.
 
         CRITICAL PACING RULES:
         - Page 1 MUST introduce the setting/protagonist.
         - Page {target_pages} MUST contain the ending or a major cliffhanger.
         - Distribute the story arc evenly. Do not rush the ending.
-        
+
         STYLE: {style}
-        
+
         OUTPUT FORMAT: JSON List.
         """
 
@@ -336,60 +341,75 @@ class ScriptingAgent:
         return response.parsed
 
     @retry_with_backoff()
-    async def write_page_script(self, cache_name: str, full_text_fallback: str, blueprint_item: dict, style: str):
+    async def write_page_script(self, blueprint_item: dict, style: str, context_constraints: str = ""):
         """
         PASS 2: THE SCRIPTWRITER
         Generates the detailed panel script for a SINGLE page, strictly following the blueprint.
+        Uses ONLY local context (focus_text) to minimize token consumption and avoid TPM limits.
         """
         page_num = blueprint_item['page_number']
-        
+        focus_text = blueprint_item.get('focus_text', "")
+
+        # Build era/context constraint block if provided
+        era_block = ""
+        if context_constraints:
+            era_block = f"""
+            HISTORICAL/SETTING CONSTRAINTS (CRITICAL):
+            {context_constraints}
+
+            ALL visual descriptions MUST conform to these constraints. NO anachronisms.
+            """
+
         async with scribe_limiter:
             print(f"✍️  Scripting Page {page_num}...")
-            
+
             prompt = f"""
             Act as a Graphic Novel Scriptwriter.
-            
+
             TASK:
             Write the panel-by-panel script for PAGE {page_num}.
-            
+            {era_block}
             BLUEPRINT FOR THIS PAGE:
             Summary: {blueprint_item['summary']}
             Mood: {blueprint_item['mood']}
             Visual Notes: {blueprint_item['visual_notes']}
-            Focus Text/Context: "{blueprint_item['focus_text']}"
-            
+
             STYLE: {style}
-            
+
+            SOURCE TEXT FOR THIS PAGE:
+            "{focus_text}"
+
             INSTRUCTIONS:
-            1. Break this page into 3-6 panels.
-            2. Use 'visual_description' for the artist (cinematic, detailed).
+            1. Break this page into 3-6 panels based on the SOURCE TEXT.
+            2. Use 'visual_description' for the artist (cinematic, detailed, era-appropriate).
             3. Use 'dialogue' for character speech ONLY:
                - MAXIMUM 80 characters per dialogue field
                - Short, punchy speech bubbles only
                - NO stage directions like (SFX), (Internal Monologue), (whispers)
                - NO sound effects in dialogue
+               - Use proper punctuation: ONE exclamation OR question mark, never "...!" or "?!"
+               - If dialogue is interrupted, use em-dash: "Wait—" NOT "Wait...!"
+               - Each speech bubble should be ONE complete thought from ONE speaker
+               - NO combining multiple speakers in one dialogue field
             4. Use 'caption' for narration boxes:
                - MAXIMUM 100 characters per caption
                - Brief, evocative narration only
+               - Third-person perspective for narration
             5. If a character has internal thoughts, put them in 'caption' NOT 'dialogue'.
             6. Ensure visual continuity with the blueprint notes.
-            
+            7. Use 'key_objects' to list important recurring items/vehicles present (e.g., ['The Nautilus', 'Harpoon']).
+            8. For EACH panel, provide an 'advice' object with:
+               - 'historical_constraints': Era-specific requirements for this panel (clothing, tech, props)
+               - 'continuity_notes': How this panel connects visually to adjacent panels
+               - 'character_gear': What each character should be wearing/carrying in this panel
+               - For UNDERWATER scenes: Characters MUST wear period diving suits (brass helmets, canvas suits)
+
             OUTPUT FORMAT: JSON.
             """
 
-            # Prepare request
+            # Prepare request - NO CACHED CONTENT used here to save TPM in parallel calls
             model = config.scripting_model_page_script
-            
-            if cache_name:
-                contents = [prompt]
-                cached_content = cache_name
-            else:
-                # For specific page scripting without cache, we ideally need context. 
-                # Since we are in fallback mode, we pass the 'focus_text' from blueprint 
-                # plus a bit of the summary as the "source".
-                # We do NOT send the full book again to save tokens if cache failed.
-                contents = [prompt, f"RELEVANT SOURCE TEXT:\n{blueprint_item['focus_text']}"]
-                cached_content = None
+            contents = [prompt]
 
             # Acquire TPM capacity for page script generation
             script_estimated = estimate_tokens_for_text(prompt)
@@ -399,7 +419,6 @@ class ScriptingAgent:
                 model=model,
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    cached_content=cached_content,
                     response_mime_type="application/json",
                     response_schema={
                         "type": "OBJECT",
@@ -415,9 +434,18 @@ class ScriptingAgent:
                                         "dialogue": {"type": "STRING"},
                                         "caption": {"type": "STRING"},
                                         "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
-                                        "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "caption-box"]}
+                                        "key_objects": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                        "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "caption-box"]},
+                                        "advice": {
+                                            "type": "OBJECT",
+                                            "properties": {
+                                                "historical_constraints": {"type": "STRING"},
+                                                "continuity_notes": {"type": "STRING"},
+                                                "character_gear": {"type": "STRING"}
+                                            }
+                                        }
                                     },
-                                    "required": ["panel_id", "visual_description", "characters"]
+                                    "required": ["panel_id", "visual_description", "characters", "advice"]
                                 }
                             }
                         },
@@ -426,12 +454,15 @@ class ScriptingAgent:
                 )
             )
 
-            # Update TPM with actual usage from page script generation
+            # Update TPM with actual usage
             script_input, script_output = extract_token_usage(response)
             get_tpm_limiter().update_actual_usage(script_estimated, script_input + script_output)
 
             # Post-process: Ensure page number matches and enforce text limits
             result = response.parsed
+            if not result:
+                raise ValueError(f"Failed to parse script for page {page_num}")
+                
             result['page_number'] = page_num
 
             # Enforce text length limits (safety net if LLM doesn't follow instructions)
@@ -441,10 +472,20 @@ class ScriptingAgent:
             for panel in result.get('panels', []):
                 # Truncate dialogue if too long
                 dialogue = panel.get('dialogue', '')
-                if dialogue and len(dialogue) > MAX_DIALOGUE_CHARS:
-                    # Find last word boundary before limit
-                    truncated = dialogue[:MAX_DIALOGUE_CHARS].rsplit(' ', 1)[0]
-                    panel['dialogue'] = truncated + '...'
+                if dialogue:
+                    # Clean up bad punctuation patterns
+                    dialogue = re.sub(r'\.\.\.!', '—', dialogue)  # ...! -> em-dash
+                    dialogue = re.sub(r'\?\!', '?', dialogue)  # ?! -> ?
+                    dialogue = re.sub(r'\!\?', '!', dialogue)  # !? -> !
+                    dialogue = re.sub(r'\.\.\.\.+', '...', dialogue)  # Multiple dots -> three
+                    dialogue = re.sub(r'!!+', '!', dialogue)  # Multiple ! -> one
+                    dialogue = re.sub(r'\?\?+', '?', dialogue)  # Multiple ? -> one
+
+                    if len(dialogue) > MAX_DIALOGUE_CHARS:
+                        # Find last word boundary before limit
+                        truncated = dialogue[:MAX_DIALOGUE_CHARS].rsplit(' ', 1)[0]
+                        dialogue = truncated + '...'
+                    panel['dialogue'] = dialogue
 
                 # Truncate caption if too long
                 caption = panel.get('caption', '')
@@ -482,8 +523,12 @@ class ScriptingAgent:
         # 2. Create Cache (The Enabler)
         cache_name = await self._get_or_create_cache(full_text)
 
-        # 3. Director Pass (Blueprint)
-        blueprint = await self.generate_pacing_blueprint(cache_name, full_text, target_pages, style)
+        # Log context constraints if provided
+        if context_constraints:
+            print(f"   Era/Context: {context_constraints[:100]}...")
+
+        # 3. Director Pass (Blueprint) - NOW WITH CONTEXT CONSTRAINTS
+        blueprint = await self.generate_pacing_blueprint(cache_name, full_text, target_pages, style, context_constraints)
 
         # Save blueprint for debugging
         blueprint_path = self.output_dir / f"{self.book_path.stem}_blueprint.json"
@@ -491,9 +536,9 @@ class ScriptingAgent:
             json.dump(blueprint, f, indent=2)
         print(f"✅ Blueprint created: {blueprint_path}")
 
-        # 3.5. Asset Manifest (Characters & Objects)
+        # 3.5. Asset Manifest (Characters & Objects) - NOW WITH CONTEXT CONSTRAINTS
         print("\n📋 Generating asset manifest...")
-        asset_manifest = await self.generate_asset_manifest(cache_name, full_text, blueprint, style)
+        asset_manifest = await self.generate_asset_manifest(cache_name, full_text, blueprint, style, context_constraints)
 
         # Save asset manifest for IllustratorAgent
         manifest_path = self.output_dir / f"{self.book_path.stem}_assets.json"
@@ -501,11 +546,11 @@ class ScriptingAgent:
             json.dump(asset_manifest, f, indent=2)
         print(f"✅ Asset manifest created: {manifest_path}")
 
-        # 4. Scriptwriter Pass (Parallel)
+        # 4. Scriptwriter Pass (Parallel) - NOW WITH CONTEXT CONSTRAINTS
         print(f"⚡ Starting Parallel Script Generation for {len(blueprint)} pages...")
-        
+
         tasks = [
-            self.write_page_script(cache_name, full_text, item, style)
+            self.write_page_script(item, style, context_constraints)
             for item in blueprint
         ]
         

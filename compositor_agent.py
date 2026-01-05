@@ -16,10 +16,17 @@ from config import config
 from utils import get_tpm_limiter, estimate_tokens_for_text, extract_token_usage
 
 class CompositorAgent:
-    def __init__(self, script_path: str):
+    def __init__(self, script_path: str, base_output_dir: Path = None):
         self.script_path = Path(script_path)
-        self.panels_dir = config.pages_dir
-        self.output_dir = config.final_pages_dir
+        
+        if base_output_dir:
+            self.base_dir = Path(base_output_dir)
+            self.panels_dir = self.base_dir / "pages"
+            self.output_dir = self.base_dir / "final_pages"
+        else:
+            self.panels_dir = config.pages_dir
+            self.output_dir = config.final_pages_dir
+            
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Configuration for a standard 2x2 grid
@@ -134,7 +141,7 @@ class CompositorAgent:
         available_height = max_height - (padding * 2)
 
         font_size = config.font_size
-        min_font_size = 16  # Don't go smaller than this (scaled for 1200x1600 pages)
+        min_font_size = 12  # Reduced from 16 to allow more text fitting
 
         temp_img = Image.new('RGB', (1, 1))
         draw = ImageDraw.Draw(temp_img)
@@ -214,9 +221,9 @@ class CompositorAgent:
         padding = 20
         edge_margin = 30
 
-        # Max bubble size: 60% of panel width, 40% of panel height
-        max_box_w = int(panel_w * 0.6)
-        max_box_h = int(panel_h * 0.4)
+        # Max bubble size: 45% of panel width, 30% of panel height (reduced to cover less panel)
+        max_box_w = int(panel_w * 0.45)
+        max_box_h = int(panel_h * 0.30)
 
         # Fit text with overflow handling
         wrapped_text, font_to_use, _ = self._fit_text_to_bubble(
@@ -269,9 +276,9 @@ class CompositorAgent:
         padding = 30
         edge_margin = 40
 
-        # Max bubble size: 55% of panel width, 45% of panel height
-        max_bubble_w = int(panel_w * 0.55)
-        max_bubble_h = int(panel_h * 0.45)
+        # Max bubble size: 40% of panel width, 30% of panel height (reduced to cover less panel)
+        max_bubble_w = int(panel_w * 0.40)
+        max_bubble_h = int(panel_h * 0.30)
 
         # Fit text with overflow handling (shrink font or truncate)
         wrapped_text, font_to_use, _ = self._fit_text_to_bubble(
@@ -842,7 +849,12 @@ class CompositorAgent:
 
         # Packaging
         print("📦 Packaging output...")
-        output_base = Path("assets/output") / self.script_path.stem
+        
+        if hasattr(self, 'base_dir'):
+             output_base = self.base_dir / self.script_path.stem
+        else:
+             output_base = Path("assets/output") / self.script_path.stem
+             
         self.export_pdf(output_base)
         self.export_epub(output_base, title=self.script_path.stem.replace("-", " ").title())
 

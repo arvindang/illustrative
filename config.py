@@ -90,7 +90,7 @@ class PipelineConfig:
     page_margin: int = 30
     panel_gutter: int = 20
     font_path: str = "fonts/PatrickHand-Regular.ttf"
-    font_size: int = 32
+    font_size: int = 24  # Reduced from 32 to cover less panel area
 
     # ==================== Image Settings ====================
     image_aspect_ratio: str = "4:3"
@@ -105,7 +105,7 @@ class PipelineConfig:
         config = cls()
 
         if not config.gemini_api_key:
-            print("⚠️ Warning: GEMINI_API_KEY not set in environment")
+            print("Warning: GEMINI_API_KEY not set in environment")
             return False
 
         # Ensure output directories exist
@@ -114,6 +114,73 @@ class PipelineConfig:
             directory.mkdir(parents=True, exist_ok=True)
 
         return True
+
+
+# ==================== ERA CONSTRAINT TEMPLATES ====================
+# Pre-built constraints for common historical periods to ensure period accuracy
+ERA_CONSTRAINTS = {
+    "1860s Victorian / Nautical": """
+Setting: 1860s Victorian era, maritime/underwater exploration.
+SHIPS: Only sailing ships, wooden merchant vessels, early coal-powered steamships with paddle wheels or single screws. NO modern vessels.
+CLOTHING (Men): Frock coats, waistcoats, cravats, top hats or bowler hats, heavy wool overcoats. Sailors wear traditional 19th-century naval uniforms.
+CLOTHING (Women): Crinolines, full skirts, high collars, bonnets.
+TECHNOLOGY: Gas lamps, telegraphs, early photography, mechanical instruments. NO electric lights, telephones, or modern electronics.
+DIVING EQUIPMENT: Brass and copper diving helmets, canvas/rubber diving suits with riveted metal plates, air hoses connected to surface pumps. NO SCUBA gear.
+WEAPONS: Harpoons, single-shot rifles, pistols, swords. NO automatic weapons.
+INTERIORS: Victorian ornate style - mahogany wood, brass fittings, velvet upholstery, oil paintings, gas lighting.
+FORBIDDEN: Automobiles, aircraft, plastic, electric lights (unless specifically from the Nautilus), modern clothing.
+""",
+    "1880s American West": """
+Setting: 1880s American frontier.
+CLOTHING: Cowboys wear wide-brimmed hats, bandanas, leather vests, chaps, spurs. Townspeople wear Victorian-era clothing.
+TRANSPORTATION: Horses, stagecoaches, steam locomotives. NO automobiles.
+WEAPONS: Single-action revolvers (Colt Peacemaker), lever-action rifles (Winchester), shotguns. NO automatic weapons.
+BUILDINGS: Wooden frontier buildings, saloons with swinging doors, general stores, livery stables.
+TECHNOLOGY: Telegraph, oil lamps, basic steam power. NO electricity, telephones.
+FORBIDDEN: Modern vehicles, electric lights, plastic, automatic weapons, modern clothing.
+""",
+    "Medieval European": """
+Setting: Medieval Europe (roughly 1100-1400 AD).
+CLOTHING: Tunics, cloaks, leather boots, chainmail for warriors. Nobility wears velvet, silk, fur-trimmed garments, circlets.
+WEAPONS: Swords, maces, axes, longbows, crossbows, halberds. NO firearms.
+ARMOR: Chainmail, plate armor (later period), leather armor, shields with heraldic designs.
+TRANSPORTATION: Horses, ox-carts, sailing ships. NO wheeled carriages (common only later).
+BUILDINGS: Stone castles, thatched cottages, Gothic cathedrals, timber-framed buildings.
+TECHNOLOGY: Forges, water mills, basic mechanical devices. NO clocks (except large tower clocks late period).
+FORBIDDEN: Firearms, printed books (before 1450), glass windows in common buildings, potatoes/tomatoes (New World crops).
+""",
+    "Ancient Rome": """
+Setting: Roman Empire (roughly 100 BC - 400 AD).
+CLOTHING: Togas for citizens, tunics for common people, military wear includes lorica segmentata, sandals. Women wear stolas and pallas.
+WEAPONS: Gladius (short sword), pilum (javelin), scutum (shield), bows.
+ARMOR: Lorica segmentata, chainmail (lorica hamata), bronze helmets, leather armor.
+TRANSPORTATION: Chariots, horses, litters (for wealthy), Roman roads, galleys and triremes.
+BUILDINGS: Columns, arches, aqueducts, amphitheaters, insulae (apartment blocks), villas with atriums.
+TECHNOLOGY: Roman concrete, aqueducts, hypocaust heating, oil lamps.
+FORBIDDEN: Stirrups (not invented yet), modern materials, glass windows (rare), paper (use scrolls).
+""",
+    "1920s Art Deco": """
+Setting: 1920s Roaring Twenties, Jazz Age.
+CLOTHING (Men): Three-piece suits, fedoras, wing-tip shoes, bow ties.
+CLOTHING (Women): Flapper dresses, cloche hats, long pearl necklaces, bobbed hair.
+TRANSPORTATION: Early automobiles (Model T, luxury cars), steam trains, ocean liners, early biplanes.
+ARCHITECTURE: Art Deco style - geometric patterns, chrome, glass, zigzag motifs, skyscrapers.
+TECHNOLOGY: Telephones (candlestick style), radios, early film cameras, electric lights.
+ENTERTAINMENT: Jazz clubs, speakeasies, silent films transitioning to talkies.
+FORBIDDEN: Television, plastic, modern cars, casual clothing like jeans/t-shirts.
+""",
+    "Feudal Japan": """
+Setting: Feudal Japan (Edo period, 1603-1868).
+CLOTHING: Kimono, hakama, obi. Samurai wear distinctive topknots (chonmage). Armor is yoroi with kabuto helmets.
+WEAPONS: Katana, wakizashi, tanto, yumi (bow), yari (spear), naginata.
+ARCHITECTURE: Wooden buildings with sliding shoji doors, tatami mats, curved roofs, castle towns.
+TRANSPORTATION: Horses, palanquins (kago), boats. NO wheeled transport common.
+TECHNOLOGY: Swords, traditional crafts, early firearms (tanegashima). NO electricity.
+CULTURE: Tea ceremony, kabuki, geisha, strict social hierarchy.
+FORBIDDEN: Western clothing, modern technology, Christianity symbols (persecuted in Edo period).
+""",
+    "Custom (Enter Below)": ""
+}
 
 
 # Global configuration instance
