@@ -64,12 +64,12 @@ class PipelineConfig:
     final_pages_dir: Path = Path("assets/output/final_pages")
 
     # ==================== Composition Settings ====================
-    page_width: int = 2400
-    page_height: int = 3200
-    page_margin: int = 60
-    panel_gutter: int = 40
+    page_width: int = 1200
+    page_height: int = 1600
+    page_margin: int = 30
+    panel_gutter: int = 20
     font_path: str = "fonts/PatrickHand-Regular.ttf"
-    font_size: int = 60
+    font_size: int = 32
 
     # ==================== Image Settings ====================
     image_aspect_ratio: str = "4:3"
