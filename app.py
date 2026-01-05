@@ -52,11 +52,16 @@ def get_db() -> Optional[Session]:
 
 def init_session_state():
     """Initialize session state variables."""
+    # Read page from URL query params for initial load
+    valid_pages = {'home', 'login', 'register', 'dashboard', 'settings', 'generate'}
+    url_page = st.query_params.get("page", "home")
+    initial_page = url_page if url_page in valid_pages else 'home'
+
     defaults = {
         # Auth state
         'user_id': None,
         'user_email': None,
-        'page': 'home',  # home, login, register, dashboard, generate
+        'page': initial_page,  # Read from URL or default to home
 
         # Pipeline state
         'api_key': '',
@@ -75,6 +80,13 @@ def init_session_state():
 def is_logged_in() -> bool:
     """Check if user is authenticated."""
     return st.session_state.user_id is not None
+
+
+def navigate_to(page: str):
+    """Navigate to a page, updating both session state and URL."""
+    st.session_state.page = page
+    st.query_params["page"] = page
+    st.rerun()
 
 
 def db_register(email: str, password: str) -> tuple[bool, str]:
@@ -350,8 +362,7 @@ def render_login_page():
                 if success:
                     st.session_state.user_id = result
                     st.session_state.user_email = email
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
+                    navigate_to('dashboard')
                 else:
                     st.error(result)
 
@@ -359,12 +370,10 @@ def render_login_page():
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Create Account", use_container_width=True):
-            st.session_state.page = 'register'
-            st.rerun()
+            navigate_to('register')
     with col2:
         if st.button("← Back to Home", use_container_width=True):
-            st.session_state.page = 'home'
-            st.rerun()
+            navigate_to('home')
 
 
 def render_register_page():
@@ -388,8 +397,7 @@ def render_register_page():
                 success, msg = db_register(email, password)
                 if success:
                     st.success("Account created! Please login.")
-                    st.session_state.page = 'login'
-                    st.rerun()
+                    navigate_to('login')
                 else:
                     st.error(msg)
 
@@ -397,12 +405,10 @@ def render_register_page():
     col1, col2 = st.columns(2)
     with col1:
         if st.button("← Back to Home", use_container_width=True):
-            st.session_state.page = 'home'
-            st.rerun()
+            navigate_to('home')
     with col2:
         if st.button("Already have an account?", use_container_width=True):
-            st.session_state.page = 'login'
-            st.rerun()
+            navigate_to('login')
 
 
 def render_dashboard():
@@ -415,18 +421,15 @@ def render_dashboard():
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("➕ New Novel", use_container_width=True, type="primary"):
-            st.session_state.page = 'generate'
-            st.rerun()
+            navigate_to('generate')
     with col2:
         if st.button("🔑 API Key", use_container_width=True):
-            st.session_state.page = 'settings'
-            st.rerun()
+            navigate_to('settings')
     with col3:
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.user_id = None
             st.session_state.user_email = None
-            st.session_state.page = 'home'
-            st.rerun()
+            navigate_to('home')
 
     st.divider()
 
@@ -473,8 +476,7 @@ def render_settings_page():
 
     st.divider()
     if st.button("← Back to Dashboard", use_container_width=True):
-        st.session_state.page = 'dashboard'
-        st.rerun()
+        navigate_to('dashboard')
 
 
 def render_generate_page():
@@ -484,8 +486,7 @@ def render_generate_page():
 
     if is_logged_in():
         if st.button("← Dashboard"):
-            st.session_state.page = 'dashboard'
-            st.rerun()
+            navigate_to('dashboard')
 
     st.subheader("1. API Key")
     saved_key = db_get_api_key(st.session_state.user_id) if is_logged_in() else None
@@ -626,12 +627,10 @@ Your key is encrypted and stored securely when you create an account.
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🔐 Login", use_container_width=True, type="primary"):
-            st.session_state.page = 'login'
-            st.rerun()
+            navigate_to('login')
     with col2:
         if st.button("📝 Create Account", use_container_width=True):
-            st.session_state.page = 'register'
-            st.rerun()
+            navigate_to('register')
 
 
 def main():
@@ -646,13 +645,11 @@ def main():
         render_register_page()
     elif page == 'dashboard':
         if not is_logged_in():
-            st.session_state.page = 'login'
-            st.rerun()
+            navigate_to('login')
         render_dashboard()
     elif page == 'settings':
         if not is_logged_in():
-            st.session_state.page = 'login'
-            st.rerun()
+            navigate_to('login')
         render_settings_page()
     elif page == 'generate':
         render_generate_page()
