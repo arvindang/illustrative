@@ -1,6 +1,6 @@
 """GraphicNovel model for tracking user's generated novels."""
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -27,6 +27,17 @@ class GraphicNovel(Base):
     status = Column(String(50), default="processing", index=True)
     error_message = Column(String(2000), nullable=True)
 
+    # Progress tracking
+    current_stage = Column(String(50), nullable=True)  # 'scripting', 'illustrating', 'compositing', 'exporting'
+    pages_completed = Column(Integer, default=0)
+    pages_total = Column(Integer, nullable=True)
+    panels_completed = Column(Integer, default=0)
+    panels_total = Column(Integer, nullable=True)
+
+    # Resume capability
+    can_resume = Column(Boolean, default=False)
+    manifest_path = Column(String(512), nullable=True)
+
     # Storage keys for S3 bucket
     pdf_storage_key = Column(String(512), nullable=True)
     epub_storage_key = Column(String(512), nullable=True)
@@ -49,6 +60,15 @@ class GraphicNovel(Base):
             "page_count": self.page_count,
             "status": self.status,
             "error_message": self.error_message,
+            # Progress tracking
+            "current_stage": self.current_stage,
+            "pages_completed": self.pages_completed,
+            "pages_total": self.pages_total,
+            "panels_completed": self.panels_completed,
+            "panels_total": self.panels_total,
+            "can_resume": self.can_resume,
+            "manifest_path": self.manifest_path,
+            # Storage
             "has_pdf": self.pdf_storage_key is not None,
             "has_epub": self.epub_storage_key is not None,
             "pdf_storage_key": self.pdf_storage_key,

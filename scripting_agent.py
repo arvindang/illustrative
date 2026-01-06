@@ -553,10 +553,24 @@ class ScriptingAgent:
             self.write_page_script(item, style, context_constraints)
             for item in blueprint
         ]
-        
-        # Execute all pages at once (bounded by scribe_limiter)
-        full_script = await asyncio.gather(*tasks)
-        
+
+        # Execute all pages at once (bounded by scribe_limiter) with error handling
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Separate successful scripts from failures
+        full_script = []
+        failed_pages = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                page_num = blueprint[i].get('page_number', i + 1)
+                print(f"   ❌ Page {page_num} script failed: {result}")
+                failed_pages.append(page_num)
+            else:
+                full_script.append(result)
+
+        if failed_pages:
+            print(f"⚠️ {len(failed_pages)} page(s) failed during scripting: {failed_pages}")
+
         # Sort by page number just in case
         full_script.sort(key=lambda x: x['page_number'])
 
