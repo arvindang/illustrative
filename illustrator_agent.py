@@ -448,13 +448,25 @@ Analyze each candidate and respond with ONLY a JSON object:
 
         print(f"\n🎨 Generating reference sheets for {len(characters)} characters and {len(objects)} objects...")
 
-        # Generate character references
+        # Generate character references (with error handling)
         char_tasks = [self.generate_character_reference(char, style) for char in characters]
-        await asyncio.gather(*char_tasks)
+        char_results = await asyncio.gather(*char_tasks, return_exceptions=True)
 
-        # Generate object references
+        # Log any character generation failures
+        for i, result in enumerate(char_results):
+            if isinstance(result, Exception):
+                char_name = characters[i].get('name', f'Character {i+1}')
+                print(f"   ❌ Character '{char_name}' reference failed: {result}")
+
+        # Generate object references (with error handling)
         obj_tasks = [self.generate_object_reference(obj, style) for obj in objects]
-        await asyncio.gather(*obj_tasks)
+        obj_results = await asyncio.gather(*obj_tasks, return_exceptions=True)
+
+        # Log any object generation failures
+        for i, result in enumerate(obj_results):
+            if isinstance(result, Exception):
+                obj_name = objects[i].get('name', f'Object {i+1}')
+                print(f"   ❌ Object '{obj_name}' reference failed: {result}")
 
         # Rebuild character map after generating new references
         self._build_character_map()
@@ -872,8 +884,20 @@ Analyze each candidate and respond with ONLY a JSON object:
 
                 page_tasks.append(self.generate_panel(page_num, panel, prev_context, next_context))
 
-            # Execute all panels for this page
-            page_images = await asyncio.gather(*page_tasks)
+            # Execute all panels for this page (with error handling)
+            page_results = await asyncio.gather(*page_tasks, return_exceptions=True)
+
+            # Process results - separate successful images from failures
+            page_images = []
+            for i, result in enumerate(page_results):
+                if isinstance(result, Exception):
+                    panel_id = panels[i].get('panel_id', i + 1)
+                    print(f"      ❌ Panel {panel_id} failed: {result}")
+                    page_images.append(None)
+                else:
+                    page_images.append(result)
+
+            # Filter out None values for consistency audit
             page_images = [img for img in page_images if img is not None]
 
             # 4. Cross-panel consistency audit (if enabled)

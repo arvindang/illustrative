@@ -9,37 +9,91 @@ from pathlib import Path
 from typing import Optional, Callable
 from google.api_core import exceptions
 
-def retry_with_backoff(max_retries=5, initial_delay=2, max_delay=60):
+class APITimeoutError(Exception):
+    """Custom timeout error with context for API operations."""
+    def __init__(self, message: str, operation: str = None, timeout: int = None):
+        self.operation = operation
+        self.timeout = timeout
+        super().__init__(message)
+
+
+async def with_timeout(coro, timeout_seconds: int = 120, context: str = ""):
     """
-    Decorator for retrying async functions with exponential backoff and jitter.
+    Wrap a coroutine with a timeout.
+
+    Args:
+        coro: The coroutine to execute
+        timeout_seconds: Maximum seconds to wait
+        context: Optional context string for error message
+
+    Returns:
+        The coroutine result
+
+    Raises:
+        APITimeoutError: If the coroutine doesn't complete in time
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        msg = f"Operation timed out after {timeout_seconds}s"
+        if context:
+            msg += f": {context}"
+        raise APITimeoutError(msg, operation=context, timeout=timeout_seconds)
+
+
+def retry_with_backoff(max_retries=5, initial_delay=2, max_delay=60, timeout_seconds=180):
+    """
+    Decorator for retrying async functions with exponential backoff, jitter, and timeout.
     Specifically targets 429 (ResourceExhausted) and 500/503 (Server Error).
+
+    Args:
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay between retries in seconds
+        max_delay: Maximum delay between retries
+        timeout_seconds: Timeout for each individual attempt (default 180s = 3 minutes)
     """
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             delay = initial_delay
             last_exception = None
-            
+
             for attempt in range(max_retries + 1):
                 try:
-                    return await func(*args, **kwargs)
+                    # Wrap each attempt with timeout
+                    return await asyncio.wait_for(
+                        func(*args, **kwargs),
+                        timeout=timeout_seconds
+                    )
+                except asyncio.TimeoutError:
+                    last_exception = APITimeoutError(
+                        f"{func.__name__} timed out after {timeout_seconds}s on attempt {attempt + 1}",
+                        operation=func.__name__,
+                        timeout=timeout_seconds
+                    )
+                    if attempt < max_retries:
+                        print(f"⚠️ Timeout (Attempt {attempt+1}/{max_retries+1}), retrying...")
+                        await asyncio.sleep(delay)
+                        delay *= 2
+                    else:
+                        raise last_exception
                 except Exception as e:
                     last_exception = e
-                    
+
                     # Check if the error is a rate limit or server error
                     # The google-genai SDK wraps these, but we check for common indicators
                     error_msg = str(e).lower()
                     is_rate_limit = "429" in error_msg or "resource_exhausted" in error_msg
                     is_server_error = "500" in error_msg or "503" in error_msg or "internal" in error_msg
-                    
+
                     if attempt < max_retries and (is_rate_limit or is_server_error):
                         # Calculate delay with jitter
                         jitter = random.uniform(0, 0.1) * delay
                         sleep_time = min(delay + jitter, max_delay)
-                        
+
                         print(f"⚠️ API Error (Attempt {attempt+1}/{max_retries+1}): {e}")
                         print(f"⏳ Retrying in {sleep_time:.2f} seconds...")
-                        
+
                         await asyncio.sleep(sleep_time)
                         delay *= 2 # Exponential backoff
                     else:
@@ -305,6 +359,51 @@ class ProductionManifest:
         if char_name not in self.data["characters_designed"]:
             self.data["characters_designed"].append(char_name)
         self.save()
+
+
+def get_manifest_progress(manifest_path: str) -> dict:
+    """
+    Read ProductionManifest and return progress summary.
+
+    Args:
+        manifest_path: Path to the production_manifest.json file
+
+    Returns:
+        Dict with: pages_completed, panels_completed, characters_designed,
+                   completed_page_numbers, error (if any)
+    """
+    manifest_path = Path(manifest_path)
+    if not manifest_path.exists():
+        return {
+            "pages_completed": 0,
+            "panels_completed": 0,
+            "characters_designed": 0,
+            "completed_page_numbers": []
+        }
+
+    try:
+        with open(manifest_path, "r") as f:
+            data = json.load(f)
+
+        completed_pages = data.get("completed_pages", {})
+        panels_completed = sum(len(panels) for panels in completed_pages.values())
+        pages_completed = len(completed_pages)
+        characters_designed = len(data.get("characters_designed", []))
+
+        return {
+            "pages_completed": pages_completed,
+            "panels_completed": panels_completed,
+            "characters_designed": characters_designed,
+            "completed_page_numbers": sorted([int(p) for p in completed_pages.keys()])
+        }
+    except Exception as e:
+        return {
+            "pages_completed": 0,
+            "panels_completed": 0,
+            "characters_designed": 0,
+            "completed_page_numbers": [],
+            "error": str(e)
+        }
 
 
 def calculate_page_count(word_count: int, test_mode: bool = False, user_override: int = None) -> dict:

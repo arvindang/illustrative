@@ -320,7 +320,7 @@ def run_async(coro):
 
 
 async def execute_pipeline(status, input_path: str, style: str, target_pages: int, test_mode: bool, novel_id: str = None, context_constraints: str = ""):
-    """Execute the full pipeline."""
+    """Execute the full pipeline with progress tracking."""
     input_stem = Path(input_path).stem
 
     # Create isolated output directory
@@ -338,7 +338,13 @@ async def execute_pipeline(status, input_path: str, style: str, target_pages: in
     base_output_dir.mkdir(parents=True, exist_ok=True)
     status.write(f"📂 Output directory: {base_output_dir}")
 
+    # Set up manifest path for progress tracking
+    manifest_path = str(base_output_dir / "production_manifest.json")
+
+    # STEP 1: SCRIPTING
     status.write("--- STEP 1/4: SCRIPTING ---")
+    if novel_id:
+        db_update_novel(novel_id, current_stage='scripting', manifest_path=manifest_path)
     status.write("📚 Loading manuscript...")
     scripter = ScriptingAgent(input_path, base_output_dir=base_output_dir)
 
@@ -354,8 +360,16 @@ async def execute_pipeline(status, input_path: str, style: str, target_pages: in
     suffix = "_test_page.json" if test_mode else "_full_script.json"
     script_path = base_output_dir / f"{input_stem}{suffix}"
 
+    # Calculate total panels for progress tracking
+    total_panels = sum(len(page.get('panels', [])) for page in script)
+
+    # STEP 2: ILLUSTRATION
     status.write("")
     status.write("--- STEP 2/4: ILLUSTRATION ---")
+    if novel_id:
+        db_update_novel(novel_id, current_stage='illustrating', pages_total=len(script),
+                       panels_total=total_panels, can_resume=True)
+
     style_prompt = f"{style} style, high-quality graphic novel art."
     illustrator = IllustratorAgent(str(script_path), style_prompt, base_output_dir=base_output_dir)
 
@@ -366,15 +380,23 @@ async def execute_pipeline(status, input_path: str, style: str, target_pages: in
     await illustrator.run_production()
     status.write("✅ Illustration complete!")
 
+    # STEP 3: COMPOSITION
     status.write("")
     status.write("--- STEP 3/4: COMPOSITION ---")
+    if novel_id:
+        db_update_novel(novel_id, current_stage='compositing')
+
     status.write("📐 Assembling final pages...")
     compositor = CompositorAgent(str(script_path), base_output_dir=base_output_dir)
     compositor.run()
     status.write("✅ Composition complete!")
 
+    # STEP 4: EXPORT
     status.write("")
     status.write("--- STEP 4/4: EXPORT ---")
+    if novel_id:
+        db_update_novel(novel_id, current_stage='exporting')
+
     output_base = base_output_dir / input_stem
     title = input_stem.replace("-", " ").replace("_", " ").title()
 
@@ -542,6 +564,169 @@ def render_settings_page():
         navigate_to('dashboard')
 
 
+def get_partial_content(user_id: str, novel_id: str) -> dict:
+    """
+    Check for partial content on disk for a novel.
+
+    Returns:
+        Dict with: has_content, panel_images (list), final_pages (list), has_script
+    """
+    base_dir = Path("assets/output") / str(user_id) / str(novel_id)
+
+    result = {
+        "has_content": False,
+        "panel_images": [],
+        "final_pages": [],
+        "has_script": False,
+        "script_path": None
+    }
+
+    if not base_dir.exists():
+        return result
+
+    # Check for panel images
+    pages_dir = base_dir / "pages"
+    if pages_dir.exists():
+        for page_dir in sorted(pages_dir.iterdir()):
+            if page_dir.is_dir():
+                for panel in sorted(page_dir.glob("panel_*.png")):
+                    result["panel_images"].append(str(panel))
+
+    # Check for final composed pages
+    final_dir = base_dir / "final_pages"
+    if final_dir.exists():
+        result["final_pages"] = sorted([str(p) for p in final_dir.glob("page_*.png")])
+
+    # Check for script
+    for script_file in base_dir.glob("*_script.json"):
+        result["has_script"] = True
+        result["script_path"] = str(script_file)
+        break
+    for script_file in base_dir.glob("*_full_script.json"):
+        result["has_script"] = True
+        result["script_path"] = str(script_file)
+        break
+
+    result["has_content"] = bool(result["panel_images"] or result["final_pages"])
+
+    return result
+
+
+def can_resume_novel(novel: dict) -> tuple:
+    """
+    Check if a novel can be resumed.
+
+    Returns:
+        Tuple of (can_resume: bool, resume_stage: str, message: str)
+    """
+    if novel['status'] == 'completed':
+        return False, None, "Already completed"
+
+    manifest_path = novel.get('manifest_path')
+    if not manifest_path or not Path(manifest_path).exists():
+        # Check if we can find content anyway
+        user_id = st.session_state.get('user_id')
+        if user_id:
+            partial = get_partial_content(user_id, novel['id'])
+            if partial['has_script']:
+                return True, 'illustrating', f"Script found at {partial['script_path']}"
+        return False, None, "No manifest or script found"
+
+    # Check manifest for progress
+    from utils import get_manifest_progress
+    progress = get_manifest_progress(manifest_path)
+
+    if progress.get('error'):
+        return False, None, f"Manifest error: {progress['error']}"
+
+    # Determine resume stage
+    base_dir = Path(manifest_path).parent
+    script_files = list(base_dir.glob("*_script.json")) + list(base_dir.glob("*_full_script.json"))
+
+    if not script_files:
+        return False, None, "No script file found"
+
+    if progress['panels_completed'] > 0:
+        return True, 'illustrating', f"{progress['panels_completed']} panels already generated"
+
+    return True, 'illustrating', "Script exists, can resume illustration"
+
+
+async def resume_pipeline(status, novel: dict, api_key: str):
+    """
+    Resume a partially completed pipeline from the last checkpoint.
+    """
+    novel_id = novel['id']
+    user_id = st.session_state.user_id
+
+    base_dir = Path("assets/output") / str(user_id) / str(novel_id)
+
+    # Find the script file
+    script_files = list(base_dir.glob("*_script.json")) + list(base_dir.glob("*_full_script.json"))
+    if not script_files:
+        raise Exception("Cannot resume: Script file not found")
+
+    script_path = script_files[0]
+
+    status.write(f"Resuming from: {script_path.name}")
+
+    # Load script to get metadata
+    import json
+    with open(script_path, 'r') as f:
+        script = json.load(f)
+
+    total_panels = sum(len(page.get('panels', [])) for page in script)
+
+    # Check current progress
+    from utils import get_manifest_progress
+    manifest_path = base_dir / "production_manifest.json"
+    if manifest_path.exists():
+        progress = get_manifest_progress(str(manifest_path))
+        status.write(f"   {progress['panels_completed']} panels already complete")
+    else:
+        status.write("   Starting fresh illustration...")
+
+    # Update DB with resume info
+    db_update_novel(novel_id, current_stage='illustrating', pages_total=len(script),
+                   panels_total=total_panels, can_resume=True)
+
+    # Resume illustration (manifest will skip completed panels)
+    style_prompt = f"{novel['art_style']} style, high-quality graphic novel art."
+    illustrator = IllustratorAgent(str(script_path), style_prompt, base_output_dir=base_dir)
+
+    status.write("--- RESUMING ILLUSTRATION ---")
+    status.write("🎨 Checking character references...")
+    await illustrator.generate_all_references(style=novel['art_style'])
+
+    status.write("🖼️ Generating remaining panel images...")
+    await illustrator.run_production()
+    status.write("✅ Illustration complete!")
+
+    # Continue with composition
+    status.write("")
+    status.write("--- COMPOSITION ---")
+    db_update_novel(novel_id, current_stage='compositing')
+
+    compositor = CompositorAgent(str(script_path), base_output_dir=base_dir)
+    compositor.run()
+    status.write("✅ Composition complete!")
+
+    # Export
+    status.write("")
+    status.write("--- EXPORT ---")
+    db_update_novel(novel_id, current_stage='exporting')
+
+    input_stem = script_path.stem.replace('_full_script', '').replace('_test_page', '')
+    output_base = base_dir / input_stem
+    title = novel['title']
+
+    status.write("📄 Generating PDF & EPUB and uploading to cloud...")
+    storage_keys = compositor.export_and_upload(output_base, novel_id, title=title)
+    status.write("✅ Export complete!")
+
+    return storage_keys
+
+
 def render_novel_detail_page():
     """Novel detail/show page."""
     novel_id = st.query_params.get("novel_id")
@@ -566,12 +751,38 @@ def render_novel_detail_page():
 
     st.title(novel['title'])
 
-    # Status badge
+    # Status badge with progress info
     status = novel['status']
     if status == 'completed':
         st.success("Completed")
     elif status == 'processing':
-        st.info("Processing...")
+        # Show detailed progress if available
+        stage = novel.get('current_stage', 'processing')
+        stage_display = {
+            'scripting': 'Scripting',
+            'illustrating': 'Illustrating',
+            'compositing': 'Compositing',
+            'exporting': 'Exporting'
+        }.get(stage, 'Processing')
+
+        # Check manifest for actual progress
+        if novel.get('manifest_path') and Path(novel['manifest_path']).exists():
+            from utils import get_manifest_progress
+            progress = get_manifest_progress(novel['manifest_path'])
+            panels_done = progress.get('panels_completed', 0)
+            panels_total = novel.get('panels_total', 0)
+
+            if panels_done > 0:
+                if panels_total > 0:
+                    pct = panels_done / panels_total
+                    st.info(f"{stage_display}... ({panels_done}/{panels_total} panels)")
+                    st.progress(pct)
+                else:
+                    st.info(f"{stage_display}... ({panels_done} panels generated)")
+            else:
+                st.info(f"{stage_display}...")
+        else:
+            st.info(f"{stage_display}...")
     else:
         st.error("Failed")
 
@@ -599,6 +810,69 @@ def render_novel_detail_page():
         st.divider()
         st.markdown("**Error Details**")
         st.error(novel['error_message'])
+
+    # Partial content and resume options for failed/processing novels
+    if status in ('failed', 'processing'):
+        user_id = st.session_state.get('user_id')
+        if user_id:
+            partial = get_partial_content(user_id, novel_id)
+
+            # Show partial content if available
+            if partial["has_content"]:
+                st.divider()
+                st.subheader("Partial Content Available")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Panel Images", len(partial["panel_images"]))
+                with col2:
+                    st.metric("Composed Pages", len(partial["final_pages"]))
+
+                # Show preview of first few final pages
+                if partial["final_pages"]:
+                    st.write("**Preview of completed pages:**")
+                    preview_count = min(4, len(partial["final_pages"]))
+                    preview_cols = st.columns(preview_count)
+                    for i in range(preview_count):
+                        with preview_cols[i]:
+                            st.image(partial["final_pages"][i], caption=f"Page {i+1}", use_container_width=True)
+
+            # Resume option
+            resumable, resume_stage, resume_msg = can_resume_novel(novel)
+
+            if resumable:
+                st.divider()
+                st.subheader("Resume Generation")
+                st.info(f"This novel can be resumed. {resume_msg}")
+
+                saved_key = db_get_api_key(st.session_state.user_id)
+
+                if saved_key:
+                    if st.button("Resume Generation", type="primary", use_container_width=True):
+                        config.gemini_api_key = saved_key
+
+                        with st.status("Resuming...", expanded=True) as resume_status:
+                            try:
+                                db_update_novel(novel_id, status="processing")
+                                storage_keys = run_async(resume_pipeline(resume_status, novel, saved_key))
+
+                                resume_status.update(label="Completed!", state="complete")
+                                db_update_novel(
+                                    novel_id,
+                                    status="completed",
+                                    pdf_storage_key=storage_keys.get('pdf_storage_key'),
+                                    epub_storage_key=storage_keys.get('epub_storage_key')
+                                )
+                                st.rerun()
+                            except Exception as e:
+                                resume_status.update(label="Error", state="error")
+                                error_msg = str(e)[:2000]
+                                st.error(error_msg)
+                                db_update_novel(novel_id, status="failed", error_message=error_msg)
+                else:
+                    st.warning("Add your Gemini API key in Settings to resume this novel.")
+                    if st.button("Go to Settings"):
+                        navigate_to('settings')
 
     # Downloads (show for completed novels)
     if status == 'completed':
