@@ -15,6 +15,18 @@ from storage.bucket import BucketStorage
 # Page Configuration
 st.set_page_config(page_title="Illustrative AI", page_icon="📚", layout="centered")
 
+# Google Analytics
+st.markdown("""
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-Q36Y0K4RP3"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-Q36Y0K4RP3');
+    </script>
+""", unsafe_allow_html=True)
+
 # Hide Streamlit's hamburger menu
 st.markdown("""
     <style>
