@@ -4,9 +4,6 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from scripting_agent import ScriptingAgent
-from illustrator_agent import IllustratorAgent
-from compositor_agent import CompositorAgent
 from constants import ART_STYLES
 from utils import calculate_page_count
 from config import config, ERA_CONSTRAINTS
@@ -350,6 +347,11 @@ def run_async(coro):
 
 async def execute_pipeline(status, input_path: str, style: str, target_pages: int, test_mode: bool, novel_id: str = None, context_constraints: str = ""):
     """Execute the full pipeline with progress tracking."""
+    # Lazy import heavy modules only when actually generating
+    from scripting_agent import ScriptingAgent
+    from illustrator_agent import IllustratorAgent
+    from compositor_agent import CompositorAgent
+
     input_stem = Path(input_path).stem
 
     # Create isolated output directory
@@ -685,6 +687,10 @@ async def resume_pipeline(status, novel: dict, api_key: str):
     """
     Resume a partially completed pipeline from the last checkpoint.
     """
+    # Lazy import heavy modules only when actually generating
+    from illustrator_agent import IllustratorAgent
+    from compositor_agent import CompositorAgent
+
     novel_id = novel['id']
     user_id = st.session_state.user_id
 
@@ -957,7 +963,7 @@ def render_generate_page():
         st.session_state.api_key = api_key
 
     st.subheader("2. Upload Manuscript")
-    uploaded_file = st.file_uploader("Choose a .txt file", type=["txt"])
+    uploaded_file = st.file_uploader("Choose a .txt file (max 10MB)", type=["txt"])
 
     if uploaded_file:
         input_path = Path("assets/input") / uploaded_file.name
@@ -1052,15 +1058,135 @@ def render_generate_page():
         render_feedback_link()
 
 
+@st.cache_data
+def get_sample_pdf_page(page_num: int) -> bytes:
+    """Extract a single page from the sample PDF as PNG bytes."""
+    try:
+        import pymupdf
+    except ImportError:
+        return None
+
+    sample_pdf = Path("assets/20-thousand-leagues-under-the-sea.pdf")
+    if not sample_pdf.exists():
+        return None
+
+    doc = pymupdf.open(str(sample_pdf))
+    if page_num >= len(doc):
+        doc.close()
+        return None
+
+    page = doc[page_num]
+    # Render at 2.5x zoom for larger, crisp images
+    mat = pymupdf.Matrix(2.5, 2.5)
+    pix = page.get_pixmap(matrix=mat)
+    img_bytes = pix.tobytes("png")
+    doc.close()
+    return img_bytes
+
+
+@st.cache_data
+def get_sample_pdf_page_count() -> int:
+    """Get total page count from sample PDF."""
+    try:
+        import pymupdf
+    except ImportError:
+        return 0
+
+    sample_pdf = Path("assets/20-thousand-leagues-under-the-sea.pdf")
+    if not sample_pdf.exists():
+        return 0
+    doc = pymupdf.open(str(sample_pdf))
+    count = len(doc)
+    doc.close()
+    return count
+
+
 def render_home_page():
     """Home page."""
-    st.title("📚 Illustrative AI")
-    st.subheader("Transform Literature into Graphic Novels")
+    # Auth buttons at top right
+    col_title, col_spacer, col_login, col_register = st.columns([3, 1, 1, 1])
+    with col_title:
+        st.title("Illustrative AI")
+    with col_login:
+        if st.button("Login", use_container_width=True):
+            navigate_to('login')
+    with col_register:
+        if st.button("Sign Up", use_container_width=True, type="primary"):
+            navigate_to('register')
+
+    st.caption("Transform Literature into Graphic Novels")
 
     st.markdown("""
-Transform royalty-free books from [Project Gutenberg](https://www.gutenberg.org/) and other public domain sources
-into beautifully illustrated graphic novels using **Google Gemini 3** and **Nano Banana**.
+An experimental pipeline for generating **100+ page graphic novels** with consistent characters and visual continuity.
+
+Unlike single-image generators, this project tackles the hard problem of **maintaining character appearance,
+art style, and narrative coherence** across long-form illustrated content using a coordinated text + image model pipeline.
+
+Upload any public domain book from [Project Gutenberg](https://www.gutenberg.org/) and watch it transform
+into a complete graphic novel with consistent character designs, dynamic panel layouts, and proper speech bubbles.
+
+[GitHub Discussions](https://github.com/arvindang/illustrative-public/discussions) · Questions, feedback, and feature requests welcome
     """)
+
+    # API Key info - moved up for visibility
+    st.divider()
+    st.markdown("### Bring Your Own API Key")
+    st.info("""
+This app requires a **Google Gemini API key** to generate graphic novels.
+
+Get your free API key at [Google AI Studio](https://aistudio.google.com/apikey).
+Your key is encrypted and stored securely when you create an account.
+
+**Cost estimate**: ~$30 USD for a 100-page novel (varies by length and complexity).
+    """)
+
+    # Sample Preview Section
+    st.divider()
+    st.markdown("### Sample Output: *20,000 Leagues Under the Sea*")
+    st.caption("104 pages · ~$30 USD in API costs · Botanical illustration style")
+
+    page_count = get_sample_pdf_page_count()
+
+    if page_count > 0:
+        # Initialize page number in session state
+        if 'preview_page' not in st.session_state:
+            st.session_state.preview_page = 1
+
+        # Navigation controls
+        col_prev, col_slider, col_next = st.columns([1, 6, 1])
+
+        with col_prev:
+            if st.button("Prev", use_container_width=True, disabled=st.session_state.preview_page <= 1):
+                st.session_state.preview_page -= 1
+                st.rerun()
+
+        with col_slider:
+            page_num = st.slider(
+                "Page",
+                min_value=1,
+                max_value=page_count,
+                value=st.session_state.preview_page,
+                key="page_slider",
+                label_visibility="collapsed"
+            )
+            if page_num != st.session_state.preview_page:
+                st.session_state.preview_page = page_num
+
+        with col_next:
+            if st.button("Next", use_container_width=True, disabled=st.session_state.preview_page >= page_count):
+                st.session_state.preview_page += 1
+                st.rerun()
+
+        st.caption(f"Page {st.session_state.preview_page} of {page_count}")
+
+        # Display current page
+        img_bytes = get_sample_pdf_page(st.session_state.preview_page - 1)
+        if img_bytes:
+            st.image(img_bytes, use_container_width=True)
+        else:
+            st.warning("Could not load page preview")
+    else:
+        st.info("Sample preview not available")
 
     st.divider()
 
@@ -1080,36 +1206,16 @@ into beautifully illustrated graphic novels using **Google Gemini 3** and **Nano
 
     st.divider()
 
-    # Features section
-    st.markdown("### Features")
+    # Technical approach section
+    st.markdown("### Technical Approach")
     st.markdown("""
-- **Multi-style artwork**: Choose from manga, comic book, watercolor, and more
-- **Consistent characters**: AI maintains character appearance across all panels
-- **Automated layout**: Dynamic page compositions with speech bubbles and captions
-- **Export options**: Download as PDF or EPUB
+- **3-Agent Pipeline**: Scripting → Illustration → Composition, each stage optimized for its task
+- **Character Reference Sheets**: Generates character designs upfront, then passes them as visual references to maintain consistency
+- **Context Caching**: Uses Gemini's 2M token context window to keep the full book in memory during script generation
+- **Batch-First Architecture**: Designed for 100+ page runs with progress tracking and resume capability
+- **Multi-style Support**: Manga, comic book, watercolor, botanical illustration, and more
+- **Export**: PDF and EPUB output with proper text overlays (not baked into images)
     """)
-
-    st.divider()
-
-    # API Key info
-    st.markdown("### Bring Your Own API Key")
-    st.info("""
-This app requires a **Google Gemini API key** to generate graphic novels.
-
-Get your free API key at [Google AI Studio](https://aistudio.google.com/apikey).
-Your key is encrypted and stored securely when you create an account.
-    """)
-
-    st.divider()
-
-    # Auth buttons
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🔐 Login", use_container_width=True, type="primary"):
-            navigate_to('login')
-    with col2:
-        if st.button("📝 Create Account", use_container_width=True):
-            navigate_to('register')
 
 
 def main():

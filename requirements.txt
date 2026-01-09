@@ -5,6 +5,7 @@ Pillow
 streamlit
 reportlab
 ebooklib
+pymupdf  # PDF page extraction for sample preview
 
 # Database
 sqlalchemy>=2.0
