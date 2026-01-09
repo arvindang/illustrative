@@ -28,9 +28,12 @@ wheels/
 
 # macOS
 .DS_Store
+**/.DS_Store
 
 # Project Specific
 assets/output/**
 !assets/output/.gitkeep
+assets/input/**
+!assets/input/.gitkeep
 production_manifest.json
 *.log
