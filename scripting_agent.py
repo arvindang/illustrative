@@ -14,7 +14,8 @@ from google import genai
 from google.genai import types
 from utils import (
     retry_with_backoff, RateLimiter, get_tpm_limiter,
-    estimate_tokens_for_text, estimate_tokens_for_cache, extract_token_usage
+    estimate_tokens_for_text, estimate_tokens_for_cache, extract_token_usage,
+    retry_api_call, calculate_dynamic_timeout
 )
 from config import config
 
@@ -250,15 +251,39 @@ class ScriptingAgent:
         print(f"🛠️ Found {len(manifest['objects'])} key objects and {len(manifest['characters'])} characters.")
         return manifest
 
-    @retry_with_backoff()
-    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str, context_constraints: str = ""):
-        """
-        PASS 1: THE DIRECTOR
-        Consumes the FULL BOOK (via cache) and outputs a page-by-page blueprint.
-        """
-        print(f"🎬 DIRECTOR PASS: Creating {target_pages}-page blueprint...")
+    # Threshold for chunked generation (pages above this get split into chunks)
+    CHUNK_THRESHOLD = 40
+    CHUNK_SIZE = 30  # Pages per chunk for large jobs
 
-        # Build era/context constraint block if provided
+    async def _generate_blueprint_chunk(
+        self,
+        cache_name: str,
+        full_text_fallback: str,
+        start_page: int,
+        end_page: int,
+        total_pages: int,
+        style: str,
+        context_constraints: str = "",
+        previous_summary: str = ""
+    ):
+        """
+        Generate a chunk of the blueprint (internal helper).
+
+        Args:
+            cache_name: Gemini context cache name
+            full_text_fallback: Full text if cache unavailable
+            start_page: First page number in this chunk
+            end_page: Last page number in this chunk
+            total_pages: Total pages in the full novel
+            style: Art style
+            context_constraints: Era/setting constraints
+            previous_summary: Summary of what happened in previous chunks (for continuity)
+        """
+        chunk_size = end_page - start_page + 1
+        is_first_chunk = start_page == 1
+        is_last_chunk = end_page == total_pages
+
+        # Build era/context constraint block
         era_block = ""
         if context_constraints:
             era_block = f"""
@@ -266,18 +291,50 @@ class ScriptingAgent:
         {context_constraints}
 
         ALL visual descriptions, costumes, technology, vehicles, and props MUST conform to these constraints.
-        Flag any elements that would be anachronistic or out-of-place.
         """
+
+        # Build continuity block for non-first chunks
+        continuity_block = ""
+        if previous_summary:
+            continuity_block = f"""
+        STORY SO FAR (Pages 1-{start_page - 1}):
+        {previous_summary}
+
+        CONTINUE the story from where it left off. Maintain character and plot consistency.
+        """
+
+        # Pacing rules vary by chunk position
+        if is_first_chunk and is_last_chunk:
+            pacing_rules = f"""
+        - Page 1 MUST introduce the setting/protagonist.
+        - Page {total_pages} MUST contain the ending or a major cliffhanger.
+        - Distribute the story arc evenly."""
+        elif is_first_chunk:
+            pacing_rules = f"""
+        - Page 1 MUST introduce the setting/protagonist.
+        - End this chunk with rising action or a plot development.
+        - This is pages {start_page}-{end_page} of a {total_pages}-page novel."""
+        elif is_last_chunk:
+            pacing_rules = f"""
+        - Build toward the climax in the middle pages.
+        - Page {total_pages} MUST contain the ending or resolution.
+        - This is the FINAL chunk (pages {start_page}-{end_page})."""
+        else:
+            pacing_rules = f"""
+        - Continue the rising action and develop the plot.
+        - End with a scene that leads into the next section.
+        - This is pages {start_page}-{end_page} of a {total_pages}-page novel."""
 
         prompt = f"""
         Act as a Master Graphic Novel Director.
 
         TASK:
-        Adapt the provided book into a TIGHT {target_pages}-PAGE Graphic Novel Script.
+        Generate pages {start_page} to {end_page} of a {total_pages}-PAGE Graphic Novel adaptation.
         {era_block}
-        You must output a JSON list of exactly {target_pages} items.
+        {continuity_block}
+        You must output a JSON list of exactly {chunk_size} items.
         Each item represents ONE PAGE and must define:
-        1. 'page_number': Integer (1 to {target_pages}).
+        1. 'page_number': Integer ({start_page} to {end_page}).
         2. 'summary': A 2-sentence summary of what happens on this page.
         3. 'focus_text': A specific quote or 200-word excerpt from the source text that this page covers.
         4. 'mood': The emotional tone (e.g., "Tense", "Melancholic").
@@ -285,28 +342,23 @@ class ScriptingAgent:
         6. 'visual_notes': Specific setting or lighting notes. Include era-appropriate details.
 
         CRITICAL PACING RULES:
-        - Page 1 MUST introduce the setting/protagonist.
-        - Page {target_pages} MUST contain the ending or a major cliffhanger.
-        - Distribute the story arc evenly. Do not rush the ending.
+        {pacing_rules}
 
         STYLE: {style}
 
-        OUTPUT FORMAT: JSON List.
+        OUTPUT FORMAT: JSON List of {chunk_size} page objects.
         """
 
-        # Prepare request arguments
         model = config.scripting_model_global_context
-        
+
         if cache_name:
-            # Use cached content
             contents = [prompt]
             cached_content = cache_name
         else:
-            # Fallback: Send full text (truncate if absolutely massive)
             contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback}"]
             cached_content = None
 
-        # Acquire TPM capacity for blueprint generation
+        # Acquire TPM capacity
         blueprint_estimated = estimate_tokens_for_text(prompt)
         await get_tpm_limiter().acquire(blueprint_estimated)
 
@@ -314,7 +366,7 @@ class ScriptingAgent:
             model=model,
             contents=contents,
             config=types.GenerateContentConfig(
-                cached_content=cached_content, # Pass the cache name here
+                cached_content=cached_content,
                 response_mime_type="application/json",
                 response_schema={
                     "type": "ARRAY",
@@ -334,11 +386,94 @@ class ScriptingAgent:
             )
         )
 
-        # Update TPM with actual usage from blueprint generation
+        # Update TPM with actual usage
         bp_input, bp_output = extract_token_usage(response)
         get_tpm_limiter().update_actual_usage(blueprint_estimated, bp_input + bp_output)
 
         return response.parsed
+
+    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str, context_constraints: str = ""):
+        """
+        PASS 1: THE DIRECTOR
+        Consumes the FULL BOOK (via cache) and outputs a page-by-page blueprint.
+
+        For large jobs (>40 pages), uses chunked generation to avoid API timeouts
+        while maximizing use of Gemini's context cache.
+        """
+        print(f"🎬 DIRECTOR PASS: Creating {target_pages}-page blueprint...")
+
+        # Determine if we need chunked generation
+        if target_pages <= self.CHUNK_THRESHOLD:
+            # Small job: single request with dynamic timeout
+            timeout = calculate_dynamic_timeout(target_pages)
+            print(f"   Using single-request mode (timeout: {timeout}s)")
+
+            blueprint = await retry_api_call(
+                self._generate_blueprint_chunk,
+                cache_name,
+                full_text_fallback,
+                1,  # start_page
+                target_pages,  # end_page
+                target_pages,  # total_pages
+                style,
+                context_constraints,
+                "",  # no previous summary
+                timeout_seconds=timeout
+            )
+            return blueprint
+
+        # Large job: chunked generation
+        chunks = []
+        start_page = 1
+
+        while start_page <= target_pages:
+            end_page = min(start_page + self.CHUNK_SIZE - 1, target_pages)
+            chunks.append((start_page, end_page))
+            start_page = end_page + 1
+
+        print(f"   Using chunked mode: {len(chunks)} chunks of ~{self.CHUNK_SIZE} pages each")
+
+        full_blueprint = []
+        previous_summary = ""
+
+        for i, (chunk_start, chunk_end) in enumerate(chunks):
+            chunk_size = chunk_end - chunk_start + 1
+            timeout = calculate_dynamic_timeout(chunk_size)
+
+            print(f"   📄 Generating chunk {i+1}/{len(chunks)} (pages {chunk_start}-{chunk_end}, timeout: {timeout}s)...")
+
+            chunk_blueprint = await retry_api_call(
+                self._generate_blueprint_chunk,
+                cache_name,
+                full_text_fallback,
+                chunk_start,
+                chunk_end,
+                target_pages,
+                style,
+                context_constraints,
+                previous_summary,
+                timeout_seconds=timeout
+            )
+
+            if not chunk_blueprint:
+                raise ValueError(f"Failed to generate blueprint chunk {i+1} (pages {chunk_start}-{chunk_end})")
+
+            full_blueprint.extend(chunk_blueprint)
+
+            # Build summary for next chunk (last 3-5 pages of current chunk)
+            recent_pages = chunk_blueprint[-min(5, len(chunk_blueprint)):]
+            previous_summary = " | ".join([
+                f"Page {p['page_number']}: {p['summary']}"
+                for p in recent_pages
+            ])
+
+            print(f"   ✅ Chunk {i+1} complete ({len(chunk_blueprint)} pages)")
+
+        # Validate page numbers are sequential
+        full_blueprint.sort(key=lambda x: x['page_number'])
+
+        print(f"✅ Blueprint complete: {len(full_blueprint)} pages generated")
+        return full_blueprint
 
     @retry_with_backoff()
     async def write_page_script(self, blueprint_item: dict, style: str, context_constraints: str = ""):
