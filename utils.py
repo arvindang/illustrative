@@ -103,6 +103,95 @@ def retry_with_backoff(max_retries=5, initial_delay=2, max_delay=60, timeout_sec
         return wrapper
     return decorator
 
+
+def calculate_dynamic_timeout(target_pages: int, base_timeout: int = 120, per_page_seconds: int = 3) -> int:
+    """
+    Calculate appropriate timeout based on job size.
+
+    For blueprint generation, larger page counts require more processing time.
+
+    Args:
+        target_pages: Number of pages being generated
+        base_timeout: Minimum timeout in seconds (default 120s)
+        per_page_seconds: Additional seconds per page (default 3s)
+
+    Returns:
+        Calculated timeout in seconds (capped at 600s)
+    """
+    calculated = base_timeout + (target_pages * per_page_seconds)
+    return min(600, calculated)  # Cap at 10 minutes max
+
+
+async def retry_api_call(
+    func,
+    *args,
+    max_retries: int = 5,
+    initial_delay: int = 2,
+    max_delay: int = 60,
+    timeout_seconds: int = 180,
+    **kwargs
+):
+    """
+    Retry an async API call with exponential backoff and configurable timeout.
+
+    Unlike the decorator, this allows dynamic timeout per call.
+
+    Args:
+        func: Async function to call
+        *args: Positional arguments for func
+        max_retries: Maximum retry attempts
+        initial_delay: Initial backoff delay in seconds
+        max_delay: Maximum backoff delay
+        timeout_seconds: Timeout for each attempt
+        **kwargs: Keyword arguments for func
+
+    Returns:
+        Result from successful func call
+
+    Raises:
+        APITimeoutError: If all attempts timeout
+        Exception: If non-retryable error occurs
+    """
+    delay = initial_delay
+    last_exception = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            return await asyncio.wait_for(
+                func(*args, **kwargs),
+                timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            last_exception = APITimeoutError(
+                f"{func.__name__} timed out after {timeout_seconds}s on attempt {attempt + 1}",
+                operation=func.__name__,
+                timeout=timeout_seconds
+            )
+            if attempt < max_retries:
+                print(f"⚠️ Timeout (Attempt {attempt+1}/{max_retries+1}), retrying...")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, max_delay)
+            else:
+                raise last_exception
+        except Exception as e:
+            last_exception = e
+            error_msg = str(e).lower()
+            is_rate_limit = "429" in error_msg or "resource_exhausted" in error_msg
+            is_server_error = "500" in error_msg or "503" in error_msg or "internal" in error_msg
+
+            if attempt < max_retries and (is_rate_limit or is_server_error):
+                jitter = random.uniform(0, 0.1) * delay
+                sleep_time = min(delay + jitter, max_delay)
+                print(f"⚠️ API Error (Attempt {attempt+1}/{max_retries+1}): {e}")
+                print(f"⏳ Retrying in {sleep_time:.2f} seconds...")
+                await asyncio.sleep(sleep_time)
+                delay = min(delay * 2, max_delay)
+            else:
+                raise last_exception
+
+    return await func(*args, **kwargs)
+
+
 class RateLimiter:
     """
     A simple semaphore-based rate limiter to prevent exceeding RPM limits.
