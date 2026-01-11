@@ -88,6 +88,96 @@ class IllustratorAgent:
         self.panel_validator = PanelValidator()
         self.consistency_auditor = ConsistencyAuditor()
 
+        # Load character arcs data if available (from enrichment pipeline)
+        self.character_arcs = {}
+        self.scene_states = {}
+        self._load_character_arcs()
+
+    def _load_character_arcs(self):
+        """Load character arcs data from the enrichment pipeline output."""
+        # Build path to character_arcs.json based on script path
+        stem = self.script_path.stem.replace('_full_script', '').replace('_test_page', '')
+        arcs_path = self.script_path.parent / f"{stem}_character_arcs.json"
+
+        if arcs_path.exists():
+            with open(arcs_path, "r") as f:
+                self.character_arcs = json.load(f)
+
+            # Build scene states lookup by page number
+            if "scene_states" in self.character_arcs:
+                for state in self.character_arcs["scene_states"]:
+                    page_num = state.get("page_number", 0)
+                    self.scene_states[page_num] = state
+            print(f"   Loaded character arcs: {len(self.character_arcs.get('characters', []))} characters")
+        else:
+            print(f"   Character arcs not found at {arcs_path}, using defaults")
+
+    def _get_scene_context(self, page_num: int, panel_data: dict) -> str:
+        """
+        Build scene-specific context from character arcs for panel generation.
+
+        Args:
+            page_num: Current page number
+            panel_data: Panel data dict
+
+        Returns:
+            str: Scene context string for prompt injection
+        """
+        context_lines = []
+        characters = panel_data.get('characters', [])
+        advice = panel_data.get('advice', {})
+        scene_type = advice.get('scene_type', '') if isinstance(advice, dict) else ''
+
+        # Get scene state for this page
+        scene_state = self.scene_states.get(page_num, {})
+        char_states = scene_state.get("characters", {})
+        interaction_rules = scene_state.get("interaction_rules", [])
+
+        # Build character-specific context
+        for char_name in characters:
+            if char_name in char_states:
+                state = char_states[char_name]
+                emotional_state = state.get("emotional_state", "")
+                gear = state.get("gear", [])
+                notes = state.get("notes", "")
+
+                if emotional_state:
+                    context_lines.append(f"{char_name} EMOTIONAL STATE: {emotional_state}")
+                if gear:
+                    context_lines.append(f"{char_name} REQUIRED GEAR: {', '.join(gear)}")
+                if notes:
+                    context_lines.append(f"{char_name} NOTES: {notes}")
+
+        # Add interaction rules
+        if interaction_rules:
+            context_lines.append(f"CHARACTER INTERACTIONS: {'; '.join(interaction_rules)}")
+
+        # Add scene type context
+        if scene_type:
+            context_lines.append(f"SCENE TYPE: {scene_type}")
+
+            # Get era-appropriate gear requirements from character arcs
+            for char_name in characters:
+                for char_data in self.character_arcs.get('characters', []):
+                    if char_data.get('name') == char_name:
+                        era_gear = char_data.get('era_appropriate_gear', {})
+
+                        # Match scene type to gear category
+                        gear_list = []
+                        scene_lower = scene_type.lower()
+                        if 'underwater' in scene_lower and 'underwater' in era_gear:
+                            gear_list = era_gear['underwater']
+                        elif 'formal' in scene_lower and 'formal' in era_gear:
+                            gear_list = era_gear['formal']
+                        elif 'aboard' in scene_lower and 'aboard_nautilus' in era_gear:
+                            gear_list = era_gear['aboard_nautilus']
+
+                        if gear_list:
+                            context_lines.append(f"{char_name} SCENE-APPROPRIATE GEAR: {', '.join(gear_list)}")
+                        break
+
+        return "\n".join(context_lines) if context_lines else ""
+
     async def _select_best_reference(self, candidates: list, char_data: dict) -> int:
         """
         Uses an LLM judge to select the best reference sheet from multiple candidates.
@@ -631,9 +721,19 @@ Analyze each candidate and respond with ONLY a JSON object:
             UNDERWATER SCENES: If characters are underwater or in water, they MUST wear appropriate period diving equipment (brass helmets, canvas suits with metal plates, air hoses). NO bare skin underwater. NO modern SCUBA gear.
             """
 
+            # Build scene-specific context from character arcs
+            scene_context = self._get_scene_context(page_num, panel_data)
+            scene_context_block = ""
+            if scene_context:
+                scene_context_block = f"""
+            CHARACTER STATE & SCENE CONTEXT (from story analysis):
+            {scene_context}
+            """
+
             master_prompt = f"""
             STYLE DIRECTIVE: {self.style_prompt}
             {era_block}
+            {scene_context_block}
             PANEL VISUALS: {panel_data['visual_description']}
 
             NARRATIVE FLOW:{narrative_flow}

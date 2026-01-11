@@ -495,6 +495,227 @@ def get_manifest_progress(manifest_path: str) -> dict:
         }
 
 
+# ============================================================================
+# BEAT DENSITY & PAGE ALLOCATION
+# ============================================================================
+
+def calculate_beat_density(beats: list, target_pages: int) -> dict:
+    """
+    Calculates page allocation based on beat intensity.
+
+    Algorithm:
+    1. Sum total intensity across all beats
+    2. Calculate base pages per beat (target_pages / num_beats)
+    3. Adjust allocation based on intensity:
+       - High intensity beats (climax, crisis) get 1.5x pages
+       - Low intensity beats (transition) get 0.7x pages
+    4. Ensure minimum 1 page per beat
+    5. Redistribute any rounding errors to highest-intensity beats
+
+    Args:
+        beats: List of beat dicts with 'beat_id', 'beat_type', 'intensity'
+        target_pages: Total pages to allocate
+
+    Returns:
+        Dict mapping beat_id to recommended page count
+    """
+    if not beats:
+        return {}
+
+    # Scene type modifiers for page allocation
+    scene_modifiers = {
+        "climax": 1.5,
+        "crisis": 1.3,
+        "midpoint": 1.2,
+        "inciting": 1.1,
+        "rising": 1.0,
+        "falling": 0.9,
+        "resolution": 0.9,
+        "denouement": 0.8,
+        "transition": 0.7
+    }
+
+    # Calculate total weighted intensity
+    total_intensity = sum(b.get('intensity', 0.5) for b in beats)
+    if total_intensity == 0:
+        total_intensity = len(beats) * 0.5  # fallback
+
+    pages_allocation = {}
+
+    for beat in beats:
+        beat_id = beat.get('beat_id', 0)
+        intensity = beat.get('intensity', 0.5)
+        beat_type = beat.get('beat_type', 'rising')
+
+        # Weight by intensity relative to average
+        weight = intensity / (total_intensity / len(beats)) if total_intensity > 0 else 1.0
+
+        # Apply scene type modifier
+        modifier = scene_modifiers.get(beat_type, 1.0)
+
+        # Calculate pages for this beat
+        base_pages = target_pages / len(beats)
+        allocated = max(1, round(base_pages * weight * modifier))
+        pages_allocation[beat_id] = allocated
+
+    # Redistribute to match target exactly
+    current_total = sum(pages_allocation.values())
+    difference = target_pages - current_total
+
+    if difference != 0:
+        # Sort beats by intensity (highest first for adding, lowest for removing)
+        sorted_beats = sorted(beats, key=lambda b: b.get('intensity', 0.5), reverse=difference > 0)
+        for i in range(abs(difference)):
+            beat_id = sorted_beats[i % len(sorted_beats)].get('beat_id', i)
+            if beat_id in pages_allocation:
+                pages_allocation[beat_id] += 1 if difference > 0 else -1
+                # Ensure minimum 1 page
+                pages_allocation[beat_id] = max(1, pages_allocation[beat_id])
+
+    return pages_allocation
+
+
+# ============================================================================
+# ERA-APPROPRIATE TERM REPLACEMENTS
+# ============================================================================
+
+ERA_TERM_REPLACEMENTS = {
+    "1860s Victorian": {
+        # Modern terms -> Period-appropriate
+        "okay": "very well",
+        "ok": "very well",
+        "sure": "certainly",
+        "yeah": "yes",
+        "yep": "yes",
+        "nope": "no",
+        "phone": "telegram",
+        "telephone": "telegram",
+        "call me": "send word",
+        "photo": "daguerreotype",
+        "photograph": "daguerreotype",
+        "camera": "photographic apparatus",
+        "electricity": "galvanic force",
+        "electric": "galvanic",
+        "car": "carriage",
+        "automobile": "carriage",
+        "gun": "revolver",
+        "pistol": "revolver",
+        "flashlight": "lantern",
+        "torch": "lantern",
+        "scientist": "natural philosopher",
+        "computer": "calculating engine",
+        "machine": "apparatus",
+        "plastic": "gutta-percha",
+        "rubber": "india-rubber",
+        "guy": "fellow",
+        "guys": "gentlemen",
+        "cool": "capital",
+        "awesome": "extraordinary",
+        "amazing": "remarkable",
+        "incredible": "astonishing",
+        "totally": "entirely",
+        "definitely": "certainly",
+        "basically": "essentially",
+        "actually": "in truth",
+        "literally": "truly",
+        "stuff": "matters",
+        "thing": "article",
+        "things": "articles",
+        "kid": "child",
+        "kids": "children",
+        "hang out": "spend time",
+        "check out": "examine",
+        "figure out": "determine",
+        "find out": "discover",
+        "show up": "arrive",
+        "deal with": "attend to",
+        "come up with": "devise",
+        "get rid of": "dispose of",
+    },
+    "1920s Art Deco": {
+        "okay": "swell",
+        "cool": "the bee's knees",
+        "awesome": "the cat's meow",
+        "phone": "telephone",
+        "car": "automobile",
+        "guy": "fella",
+        "guys": "fellas",
+        "amazing": "swell",
+        "incredible": "extraordinary",
+    },
+    "Medieval Fantasy": {
+        "okay": "very well",
+        "cool": "remarkable",
+        "awesome": "magnificent",
+        "amazing": "wondrous",
+        "guy": "fellow",
+        "guys": "men",
+        "phone": "messenger",
+        "car": "carriage",
+        "gun": "crossbow",
+        "electricity": "magic",
+        "machine": "contraption",
+    }
+}
+
+
+def normalize_era_term(term: str, era: str) -> str:
+    """
+    Replaces modern terms with period-appropriate alternatives.
+
+    Args:
+        term: Potentially anachronistic term
+        era: Era identifier (e.g., "1860s Victorian")
+
+    Returns:
+        Period-appropriate replacement or original term
+    """
+    replacements = ERA_TERM_REPLACEMENTS.get(era, {})
+    term_lower = term.lower()
+
+    if term_lower in replacements:
+        replacement = replacements[term_lower]
+        # Preserve original capitalization pattern
+        if term[0].isupper():
+            return replacement.capitalize()
+        return replacement
+
+    return term
+
+
+def fix_era_anachronisms(text: str, era: str) -> str:
+    """
+    Scans text for anachronistic terms and replaces them with era-appropriate alternatives.
+
+    Args:
+        text: Text to process (dialogue or narration)
+        era: Era identifier for lookup
+
+    Returns:
+        Text with anachronisms replaced
+    """
+    import re
+
+    replacements = ERA_TERM_REPLACEMENTS.get(era, {})
+    if not replacements:
+        return text
+
+    result = text
+    for modern_term, period_term in replacements.items():
+        # Case-insensitive replacement with word boundaries
+        pattern = re.compile(r'\b' + re.escape(modern_term) + r'\b', re.IGNORECASE)
+
+        def replace_match(match):
+            original = match.group(0)
+            if original[0].isupper():
+                return period_term.capitalize()
+            return period_term
+
+        result = pattern.sub(replace_match, result)
+
+    return result
+
+
 def calculate_page_count(word_count: int, test_mode: bool = False, user_override: int = None) -> dict:
     """
     Calculate optimal page count based on word count.

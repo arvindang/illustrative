@@ -15,7 +15,8 @@ from google.genai import types
 from utils import (
     retry_with_backoff, RateLimiter, get_tpm_limiter,
     estimate_tokens_for_text, estimate_tokens_for_cache, extract_token_usage,
-    retry_api_call, calculate_dynamic_timeout
+    retry_api_call, calculate_dynamic_timeout, calculate_beat_density,
+    fix_era_anachronisms
 )
 from config import config
 
@@ -140,10 +141,306 @@ class ScriptingAgent:
         return canonical_chars
 
     @retry_with_backoff()
-    async def generate_asset_manifest(self, cache_name: str, full_text_fallback: str, blueprint: list, style: str, context_constraints: str = ""):
+    async def analyze_narrative_beats(self, cache_name: str, full_text_fallback: str, target_pages: int) -> dict:
         """
-        PASS 1.5: ASSET EXTRACTION
+        PASS 1: BEAT ANALYSIS
+        Analyzes the narrative structure and identifies story beats.
+
+        This pass breaks the novel into narrative beats with intensity scores,
+        identifies act structure, and calculates page allocation.
+
+        Args:
+            cache_name: Gemini context cache reference
+            full_text_fallback: Full text if cache unavailable
+            target_pages: Target number of pages for allocation
+
+        Returns:
+            BeatMap dict with beats, act_boundaries, pacing_recommendations
+        """
+        print(f"🎭 BEAT ANALYSIS PASS: Extracting narrative structure...")
+
+        prompt = f"""
+        Act as a Story Structure Analyst for graphic novel adaptation.
+
+        TASK:
+        Analyze the source material and identify the key narrative BEATS.
+        A beat is a significant story event that advances the plot or reveals character.
+
+        For a {target_pages}-page graphic novel, identify approximately {max(5, target_pages // 5)} major beats.
+
+        For EACH beat, provide:
+        1. 'beat_id': Sequential integer starting from 1
+        2. 'beat_type': One of: "inciting", "rising", "midpoint", "crisis", "climax", "resolution", "denouement", "transition"
+        3. 'description': A 1-2 sentence description of what happens in this beat
+        4. 'intensity': Float from 0.0 to 1.0 indicating dramatic intensity
+           - 0.0-0.3: Quiet moments, transitions, establishing shots
+           - 0.4-0.6: Rising action, character development
+           - 0.7-0.8: Major confrontations, revelations
+           - 0.9-1.0: Climax, crisis, major turning points
+        5. 'key_characters': List of characters central to this beat
+        6. 'emotional_tone': The dominant emotion (e.g., "tense", "melancholic", "triumphant")
+        7. 'scene_type': One of: "action", "dialogue", "establishing", "montage", "flashback", "transition"
+
+        Also identify:
+        - 'act_boundaries': Which beat_id ends Act 1 and Act 2 (for 3-act structure)
+        - 'total_word_count': Approximate word count of source material
+
+        OUTPUT: JSON object with the specified structure.
+        """
+
+        model = config.scripting_model_global_context
+
+        if cache_name:
+            contents = [prompt]
+            cached_content = cache_name
+        else:
+            contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback}"]
+            cached_content = None
+
+        # Acquire TPM capacity
+        estimated_tokens = estimate_tokens_for_text(prompt)
+        await get_tpm_limiter().acquire(estimated_tokens)
+
+        response = await get_client().aio.models.generate_content(
+            model=model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                cached_content=cached_content,
+                response_mime_type="application/json",
+                response_schema={
+                    "type": "OBJECT",
+                    "properties": {
+                        "total_word_count": {"type": "INTEGER"},
+                        "beats": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "beat_id": {"type": "INTEGER"},
+                                    "beat_type": {"type": "STRING"},
+                                    "description": {"type": "STRING"},
+                                    "intensity": {"type": "NUMBER"},
+                                    "key_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "emotional_tone": {"type": "STRING"},
+                                    "scene_type": {"type": "STRING"}
+                                },
+                                "required": ["beat_id", "beat_type", "description", "intensity", "key_characters"]
+                            }
+                        },
+                        "act_boundaries": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "act_1_end": {"type": "INTEGER"},
+                                "act_2_end": {"type": "INTEGER"}
+                            }
+                        }
+                    },
+                    "required": ["beats", "act_boundaries"]
+                }
+            )
+        )
+
+        # Update TPM with actual usage
+        input_tokens, output_tokens = extract_token_usage(response)
+        get_tpm_limiter().update_actual_usage(estimated_tokens, input_tokens + output_tokens)
+
+        if response.parsed is None:
+            raise ValueError("Failed to parse beat analysis from API response")
+
+        beat_map = response.parsed
+
+        # Calculate page allocation from beat density
+        beats = beat_map.get('beats', [])
+        pages_per_beat = calculate_beat_density(beats, target_pages)
+
+        # Add pacing recommendations to the beat map
+        beat_map['pacing_recommendations'] = {
+            'pages_per_beat': pages_per_beat,
+            'target_pages': target_pages
+        }
+
+        # Add page_allocation to each beat for convenience
+        for beat in beats:
+            beat_id = beat.get('beat_id', 0)
+            beat['page_allocation'] = pages_per_beat.get(beat_id, 1)
+
+        print(f"✅ Identified {len(beats)} narrative beats")
+        print(f"   Act 1 ends at beat {beat_map.get('act_boundaries', {}).get('act_1_end', '?')}")
+        print(f"   Act 2 ends at beat {beat_map.get('act_boundaries', {}).get('act_2_end', '?')}")
+
+        return beat_map
+
+    @retry_with_backoff()
+    async def generate_character_deep_dive(self, cache_name: str, full_text_fallback: str, blueprint: list) -> dict:
+        """
+        PASS 3: CHARACTER DEEP DIVE
+        Generates detailed character arcs and scene-specific states.
+
+        Args:
+            cache_name: Gemini context cache reference
+            full_text_fallback: Full text if cache unavailable
+            blueprint: Page-by-page blueprint from Pass 2
+
+        Returns:
+            CharacterArcs dict with characters, scene_states
+        """
+        # Extract unique characters from blueprint
+        characters = self.extract_characters_from_blueprint(blueprint)
+        print(f"🎭 CHARACTER DEEP DIVE: Analyzing arcs for {len(characters)} characters...")
+
+        # Create a summary of pages for context
+        page_summaries = [
+            f"Page {p['page_number']}: {p.get('summary', '')} (Characters: {', '.join(p.get('key_characters', []))})"
+            for p in blueprint[:50]  # Limit to first 50 pages for context size
+        ]
+        page_context = "\n".join(page_summaries)
+
+        prompt = f"""
+        Act as a Character Development Specialist for graphic novel adaptation.
+
+        TASK:
+        Analyze the characters and their journeys through the story.
+
+        CHARACTERS TO ANALYZE:
+        {', '.join(characters)}
+
+        PAGE SUMMARY (for tracking character appearances):
+        {page_context}
+
+        For EACH major character (top 5-8), provide:
+        1. 'name': Canonical name
+        2. 'role': "protagonist", "antagonist", "supporting", or "minor"
+        3. 'arc_type': "transformation", "flat", "corruption", "redemption", "fall", "rise"
+        4. 'introduction_page': First page number where they appear
+        5. 'distinctive_items': List of 2-3 items they should always carry/wear
+        6. 'era_appropriate_gear': Object mapping scene types to required gear:
+           - "underwater": ["diving helmet", "weighted boots", etc.]
+           - "aboard_ship": ["nautical uniform", etc.]
+           - "formal": ["evening wear", etc.]
+           - "action": ["practical clothing", etc.]
+        7. 'relationships': Object mapping other character names to relationship types
+           (e.g., "Captain Nemo": "mentor-student", "Ned Land": "reluctant-ally")
+        8. 'key_moments': List of {{page, event, emotional_state, visual_change}} for major character beats
+
+        Also provide 'scene_states' - a list of page-by-page character states for key pages:
+        For each important scene transition (every 5-10 pages or major scene change):
+        - 'page_number': The page number
+        - 'characters': Object mapping character names to their state:
+          - 'emotional_state': Current emotion
+          - 'gear': List of items they should have in this scene
+          - 'notes': Any special visual requirements
+        - 'interaction_rules': List of rules for how characters interact in this scene
+
+        OUTPUT: JSON object with 'characters' array and 'scene_states' array.
+        """
+
+        model = config.scripting_model_global_context
+
+        if cache_name:
+            contents = [prompt]
+            cached_content = cache_name
+        else:
+            contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback[:50000]}"]
+            cached_content = None
+
+        # Acquire TPM capacity
+        estimated_tokens = estimate_tokens_for_text(prompt)
+        await get_tpm_limiter().acquire(estimated_tokens)
+
+        response = await get_client().aio.models.generate_content(
+            model=model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                cached_content=cached_content,
+                response_mime_type="application/json",
+                response_schema={
+                    "type": "OBJECT",
+                    "properties": {
+                        "characters": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "name": {"type": "STRING"},
+                                    "role": {"type": "STRING"},
+                                    "arc_type": {"type": "STRING"},
+                                    "introduction_page": {"type": "INTEGER"},
+                                    "distinctive_items": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "era_appropriate_gear": {
+                                        "type": "OBJECT",
+                                        "additionalProperties": {
+                                            "type": "ARRAY",
+                                            "items": {"type": "STRING"}
+                                        }
+                                    },
+                                    "relationships": {
+                                        "type": "OBJECT",
+                                        "additionalProperties": {"type": "STRING"}
+                                    },
+                                    "key_moments": {
+                                        "type": "ARRAY",
+                                        "items": {
+                                            "type": "OBJECT",
+                                            "properties": {
+                                                "page": {"type": "INTEGER"},
+                                                "event": {"type": "STRING"},
+                                                "emotional_state": {"type": "STRING"},
+                                                "visual_change": {"type": "STRING"}
+                                            }
+                                        }
+                                    }
+                                },
+                                "required": ["name", "role", "distinctive_items"]
+                            }
+                        },
+                        "scene_states": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "page_number": {"type": "INTEGER"},
+                                    "characters": {
+                                        "type": "OBJECT",
+                                        "additionalProperties": {
+                                            "type": "OBJECT",
+                                            "properties": {
+                                                "emotional_state": {"type": "STRING"},
+                                                "gear": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                                "notes": {"type": "STRING"}
+                                            }
+                                        }
+                                    },
+                                    "interaction_rules": {"type": "ARRAY", "items": {"type": "STRING"}}
+                                },
+                                "required": ["page_number", "characters"]
+                            }
+                        }
+                    },
+                    "required": ["characters", "scene_states"]
+                }
+            )
+        )
+
+        # Update TPM with actual usage
+        input_tokens, output_tokens = extract_token_usage(response)
+        get_tpm_limiter().update_actual_usage(estimated_tokens, input_tokens + output_tokens)
+
+        if response.parsed is None:
+            raise ValueError("Failed to parse character deep dive from API response")
+
+        character_arcs = response.parsed
+
+        print(f"✅ Character arcs complete: {len(character_arcs.get('characters', []))} characters analyzed")
+        print(f"   Scene states tracked: {len(character_arcs.get('scene_states', []))} key scenes")
+
+        return character_arcs
+
+    @retry_with_backoff()
+    async def generate_asset_manifest(self, cache_name: str, full_text_fallback: str, blueprint: list, style: str, context_constraints: str = "", character_arcs: dict = None):
+        """
+        PASS 4: ASSET EXTRACTION (Enhanced)
         Generates visual descriptions for characters and key objects in a single pass.
+        Now includes interaction_rules for scene-specific requirements.
         """
         # Extract unique characters from blueprint
         characters = self.extract_characters_from_blueprint(blueprint)
@@ -160,10 +457,25 @@ class ScriptingAgent:
         NO anachronistic elements (modern clothing, technology, or materials).
         """
 
+        # Build character arc context if available
+        arc_context = ""
+        if character_arcs and character_arcs.get('characters'):
+            arc_list = []
+            for char in character_arcs['characters'][:5]:  # Top 5 characters
+                items = ', '.join(char.get('distinctive_items', []))
+                arc_list.append(f"  - {char.get('name')}: {char.get('role', 'supporting')}, items: {items}")
+            arc_context = f"""
+        CHARACTER ARC CONTEXT (from deep dive analysis):
+{chr(10).join(arc_list)}
+
+        Ensure character designs incorporate these distinctive items and role characteristics.
+        """
+
         # Combined prompt for characters and objects
         combined_prompt = f"""
         Act as a Visual Development Artist for a '{style}' graphic novel.
         {era_block}
+        {arc_context}
         PART 1: CHARACTER DESIGN
         For each of the following characters, provide:
         - name: Canonical name
@@ -183,6 +495,16 @@ class ScriptingAgent:
         - key_features: List of identifying shapes or mechanisms (era-appropriate technology)
         - condition: The state of wear (e.g., "Pristine and polished", "Rusted and barnacle-encrusted", "Ancient and crumbling")
         - material_context: Primary materials appropriate to the era (e.g., "Riveted iron and brass", "Bioluminescent organic matter")
+
+        PART 3: INTERACTION RULES
+        Define scene-specific requirements for visual consistency:
+        - underwater_scenes: List requirements (e.g., "All characters MUST wear period diving equipment with brass helmets")
+        - formal_scenes: List requirements (e.g., "Victorian evening wear, men in frock coats")
+        - action_scenes: List requirements (e.g., "Practical clothing, freedom of movement")
+        - aboard_ship: List requirements (e.g., "Nautical attire appropriate to role")
+
+        Also identify any 'forbidden_combinations' - things that should NEVER appear together:
+        - Example: {{"characters": ["Professor Aronnax"], "items": ["modern SCUBA gear"], "reason": "anachronism"}}
 
         Be specific and visual for use in AI image generation.
         """
@@ -231,9 +553,29 @@ class ScriptingAgent:
                                 },
                                 "required": ["name", "description"]
                             }
+                        },
+                        "interaction_rules": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "underwater_scenes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "formal_scenes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "action_scenes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "aboard_ship": {"type": "ARRAY", "items": {"type": "STRING"}}
+                            }
+                        },
+                        "forbidden_combinations": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "items": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "reason": {"type": "STRING"}
+                                }
+                            }
                         }
                     },
-                    "required": ["characters", "objects"]
+                    "required": ["characters", "objects", "interaction_rules"]
                 }
             )
         )
@@ -264,7 +606,8 @@ class ScriptingAgent:
         total_pages: int,
         style: str,
         context_constraints: str = "",
-        previous_summary: str = ""
+        previous_summary: str = "",
+        beat_guidance: str = ""
     ):
         """
         Generate a chunk of the blueprint (internal helper).
@@ -332,6 +675,7 @@ class ScriptingAgent:
         Generate pages {start_page} to {end_page} of a {total_pages}-PAGE Graphic Novel adaptation.
         {era_block}
         {continuity_block}
+        {beat_guidance}
         You must output a JSON list of exactly {chunk_size} items.
         Each item represents ONE PAGE and must define:
         1. 'page_number': Integer ({start_page} to {end_page}).
@@ -340,6 +684,7 @@ class ScriptingAgent:
         4. 'mood': The emotional tone (e.g., "Tense", "Melancholic").
         5. 'key_characters': List of characters present.
         6. 'visual_notes': Specific setting or lighting notes. Include era-appropriate details.
+        7. 'scene_type': One of "action", "dialogue", "establishing", "montage", "flashback", "transition", "underwater", "formal"
 
         CRITICAL PACING RULES:
         {pacing_rules}
@@ -378,9 +723,10 @@ class ScriptingAgent:
                             "focus_text": {"type": "STRING"},
                             "mood": {"type": "STRING"},
                             "key_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "visual_notes": {"type": "STRING"}
+                            "visual_notes": {"type": "STRING"},
+                            "scene_type": {"type": "STRING"}
                         },
-                        "required": ["page_number", "summary", "focus_text", "key_characters"]
+                        "required": ["page_number", "summary", "focus_text", "key_characters", "scene_type"]
                     }
                 }
             )
@@ -392,15 +738,42 @@ class ScriptingAgent:
 
         return response.parsed
 
-    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str, context_constraints: str = ""):
+    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str, context_constraints: str = "", beat_map: dict = None):
         """
-        PASS 1: THE DIRECTOR
+        PASS 2: THE DIRECTOR
         Consumes the FULL BOOK (via cache) and outputs a page-by-page blueprint.
+
+        Enhanced to use beat_map for intelligent page allocation and adds scene_type.
 
         For large jobs (>40 pages), uses chunked generation to avoid API timeouts
         while maximizing use of Gemini's context cache.
+
+        Args:
+            cache_name: Gemini context cache reference
+            full_text_fallback: Full text if cache unavailable
+            target_pages: Target number of pages
+            style: Art style
+            context_constraints: Era/setting constraints
+            beat_map: Optional beat analysis from Pass 1 for pacing guidance
         """
         print(f"🎬 DIRECTOR PASS: Creating {target_pages}-page blueprint...")
+
+        # Build beat guidance if available
+        beat_guidance = ""
+        if beat_map and beat_map.get('beats'):
+            beats = beat_map['beats']
+            beat_list = "\n".join([
+                f"  Beat {b['beat_id']}: {b['description']} ({b.get('page_allocation', 1)} pages, {b.get('beat_type', 'rising')})"
+                for b in beats
+            ])
+            beat_guidance = f"""
+        NARRATIVE BEAT GUIDANCE (from story analysis):
+        Allocate pages according to this beat structure:
+{beat_list}
+
+        Use the page allocation to determine pacing. High-intensity beats (climax, crisis) get more pages.
+        """
+            print(f"   Using beat-based allocation from {len(beats)} beats")
 
         # Determine if we need chunked generation
         if target_pages <= self.CHUNK_THRESHOLD:
@@ -418,6 +791,7 @@ class ScriptingAgent:
                 style,
                 context_constraints,
                 "",  # no previous summary
+                beat_guidance,  # beat guidance from analysis
                 timeout_seconds=timeout
             )
             return blueprint
@@ -452,6 +826,7 @@ class ScriptingAgent:
                 style,
                 context_constraints,
                 previous_summary,
+                beat_guidance,  # beat guidance from analysis
                 timeout_seconds=timeout
             )
 
@@ -476,14 +851,16 @@ class ScriptingAgent:
         return full_blueprint
 
     @retry_with_backoff()
-    async def write_page_script(self, blueprint_item: dict, style: str, context_constraints: str = ""):
+    async def write_page_script(self, blueprint_item: dict, style: str, context_constraints: str = "", character_arcs: dict = None, assets: dict = None):
         """
-        PASS 2: THE SCRIPTWRITER
+        PASS 5: THE SCRIPTWRITER (Enhanced)
         Generates the detailed panel script for a SINGLE page, strictly following the blueprint.
-        Uses ONLY local context (focus_text) to minimize token consumption and avoid TPM limits.
+        Uses character_arcs for scene-specific gear and emotional states.
+        Uses assets for interaction_rules.
         """
         page_num = blueprint_item['page_number']
         focus_text = blueprint_item.get('focus_text', "")
+        scene_type = blueprint_item.get('scene_type', 'dialogue')
 
         # Build era/context constraint block if provided
         era_block = ""
@@ -495,8 +872,49 @@ class ScriptingAgent:
             ALL visual descriptions MUST conform to these constraints. NO anachronisms.
             """
 
+        # Build scene-specific gear context from character_arcs
+        scene_context = ""
+        if character_arcs:
+            # Find scene state for this page (or nearest earlier page)
+            scene_states = character_arcs.get('scene_states', [])
+            relevant_state = None
+            for state in sorted(scene_states, key=lambda x: x.get('page_number', 0), reverse=True):
+                if state.get('page_number', 0) <= page_num:
+                    relevant_state = state
+                    break
+
+            if relevant_state:
+                char_states = []
+                for char_name, char_state in relevant_state.get('characters', {}).items():
+                    gear = ', '.join(char_state.get('gear', []))
+                    emotion = char_state.get('emotional_state', 'neutral')
+                    char_states.append(f"  - {char_name}: {emotion}, gear: [{gear}]")
+
+                rules = relevant_state.get('interaction_rules', [])
+                rules_text = '\n'.join(f"  - {r}" for r in rules) if rules else "  (none specified)"
+
+                scene_context = f"""
+            CHARACTER STATES FOR THIS SCENE (Page {relevant_state.get('page_number')}):
+{chr(10).join(char_states)}
+
+            INTERACTION RULES:
+{rules_text}
+            """
+
+        # Build interaction rules from assets
+        interaction_context = ""
+        if assets and assets.get('interaction_rules'):
+            rules = assets['interaction_rules']
+            scene_rules = rules.get(f'{scene_type}_scenes', [])
+            if scene_rules:
+                interaction_context = f"""
+            SCENE TYPE: {scene_type}
+            REQUIRED FOR THIS SCENE TYPE:
+            {chr(10).join(f'  - {r}' for r in scene_rules)}
+            """
+
         async with scribe_limiter:
-            print(f"✍️  Scripting Page {page_num}...")
+            print(f"✍️  Scripting Page {page_num} ({scene_type})...")
 
             prompt = f"""
             Act as a Graphic Novel Scriptwriter.
@@ -504,10 +922,13 @@ class ScriptingAgent:
             TASK:
             Write the panel-by-panel script for PAGE {page_num}.
             {era_block}
+            {scene_context}
+            {interaction_context}
             BLUEPRINT FOR THIS PAGE:
             Summary: {blueprint_item['summary']}
             Mood: {blueprint_item['mood']}
-            Visual Notes: {blueprint_item['visual_notes']}
+            Visual Notes: {blueprint_item.get('visual_notes', '')}
+            Scene Type: {scene_type}
 
             STYLE: {style}
 
@@ -533,11 +954,12 @@ class ScriptingAgent:
             5. If a character has internal thoughts, put them in 'caption' NOT 'dialogue'.
             6. Ensure visual continuity with the blueprint notes.
             7. Use 'key_objects' to list important recurring items/vehicles present (e.g., ['The Nautilus', 'Harpoon']).
-            8. For EACH panel, provide an 'advice' object with:
-               - 'historical_constraints': Era-specific requirements for this panel (clothing, tech, props)
-               - 'continuity_notes': How this panel connects visually to adjacent panels
-               - 'character_gear': What each character should be wearing/carrying in this panel
-               - For UNDERWATER scenes: Characters MUST wear period diving suits (brass helmets, canvas suits)
+            8. For EACH panel, provide a STRUCTURED 'advice' object with:
+               - 'scene_type': "{scene_type}" (must match page scene type)
+               - 'required_gear': Object mapping character names to list of required gear
+               - 'era_constraints': List of era-specific requirements for this panel
+               - 'continuity': Object with 'from_previous' and 'to_next' descriptions
+               - 'composition': Object with 'negative_space' position for text overlay
 
             OUTPUT FORMAT: JSON.
             """
@@ -574,9 +996,28 @@ class ScriptingAgent:
                                         "advice": {
                                             "type": "OBJECT",
                                             "properties": {
-                                                "historical_constraints": {"type": "STRING"},
-                                                "continuity_notes": {"type": "STRING"},
-                                                "character_gear": {"type": "STRING"}
+                                                "scene_type": {"type": "STRING"},
+                                                "required_gear": {
+                                                    "type": "OBJECT",
+                                                    "additionalProperties": {
+                                                        "type": "ARRAY",
+                                                        "items": {"type": "STRING"}
+                                                    }
+                                                },
+                                                "era_constraints": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                                "continuity": {
+                                                    "type": "OBJECT",
+                                                    "properties": {
+                                                        "from_previous": {"type": "STRING"},
+                                                        "to_next": {"type": "STRING"}
+                                                    }
+                                                },
+                                                "composition": {
+                                                    "type": "OBJECT",
+                                                    "properties": {
+                                                        "negative_space": {"type": "STRING"}
+                                                    }
+                                                }
                                             }
                                         }
                                     },
@@ -632,64 +1073,99 @@ class ScriptingAgent:
 
     async def generate_script(self, style: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
         """
-        Main orchestration method:
-        1. Load Content
-        2. Create Cache
-        3. Director Pass (Blueprint)
-        4. Scriptwriter Pass (Parallel Execution)
+        Main orchestration method - 7-pass enrichment pipeline:
+
+        PASS 0: Global Context (provided via context_constraints)
+        PASS 1: Beat Analysis - Extract narrative beats, intensity, act structure
+        PASS 2: Director Pass - Blueprint with beat-based page allocation
+        PASS 3: Character Deep Dive - Arcs, relationships, scene-specific gear
+        PASS 4: Asset Manifest - Characters, objects, interaction rules
+        PASS 5: Scriptwriter Pass - Panel scripts with structured advice
+        PASS 6: Validation + Auto-Fix - Validate and fix common issues
         """
-        # Output path
+        from validators import validate_and_autofix_script, ValidationReport
+
+        # Output paths
         suffix = "_test_page.json" if test_mode else "_full_script.json"
         output_file = self.output_dir / f"{self.book_path.stem}{suffix}"
-        
+
         if output_file.exists() and not test_mode:
              print(f"⏭️  Skipping Script Generation (Already exists: {output_file})")
              with open(output_file, "r") as f:
                  return json.load(f)
 
-        # 1. Load Content
-        full_text = self.load_content(test_mode=False) # Always load full for caching
+        # Load Content
+        full_text = self.load_content(test_mode=False)  # Always load full for caching
         target_pages = target_page_override or (3 if test_mode else 10)
-        
+
         print(f"\n📚 Scripting '{self.book_path.stem}'")
         print(f"   Target Length: {target_pages} pages")
         print(f"   Style: {style}")
 
-        # 2. Create Cache (The Enabler)
+        # Create Cache (The Enabler)
         cache_name = await self._get_or_create_cache(full_text)
 
         # Log context constraints if provided
         if context_constraints:
             print(f"   Era/Context: {context_constraints[:100]}...")
 
-        # 3. Director Pass (Blueprint) - NOW WITH CONTEXT CONSTRAINTS
-        blueprint = await self.generate_pacing_blueprint(cache_name, full_text, target_pages, style, context_constraints)
+        # ========== PASS 1: Beat Analysis ==========
+        print("\n🎭 PASS 1: Analyzing narrative beats...")
+        beat_map = await self.analyze_narrative_beats(cache_name, full_text, target_pages)
 
-        # Save blueprint for debugging
+        # Save beat map
+        beats_path = self.output_dir / f"{self.book_path.stem}_beats.json"
+        with open(beats_path, "w") as f:
+            json.dump(beat_map, f, indent=2)
+        print(f"✅ Beat analysis complete: {beats_path}")
+        print(f"   Found {len(beat_map.get('beats', []))} narrative beats")
+
+        # ========== PASS 2: Director Pass (Blueprint) ==========
+        print("\n🎬 PASS 2: Generating pacing blueprint...")
+        blueprint = await self.generate_pacing_blueprint(
+            cache_name, full_text, target_pages, style, context_constraints, beat_map
+        )
+
+        # Save blueprint
         blueprint_path = self.output_dir / f"{self.book_path.stem}_blueprint.json"
         with open(blueprint_path, "w") as f:
             json.dump(blueprint, f, indent=2)
         print(f"✅ Blueprint created: {blueprint_path}")
 
-        # 3.5. Asset Manifest (Characters & Objects) - NOW WITH CONTEXT CONSTRAINTS
-        print("\n📋 Generating asset manifest...")
-        asset_manifest = await self.generate_asset_manifest(cache_name, full_text, blueprint, style, context_constraints)
+        # ========== PASS 3: Character Deep Dive ==========
+        print("\n👥 PASS 3: Generating character deep dive...")
+        character_arcs = await self.generate_character_deep_dive(
+            cache_name, full_text, blueprint
+        )
 
-        # Save asset manifest for IllustratorAgent
+        # Save character arcs
+        arcs_path = self.output_dir / f"{self.book_path.stem}_character_arcs.json"
+        with open(arcs_path, "w") as f:
+            json.dump(character_arcs, f, indent=2)
+        print(f"✅ Character arcs created: {arcs_path}")
+        print(f"   Tracking {len(character_arcs.get('characters', []))} characters")
+
+        # ========== PASS 4: Asset Manifest ==========
+        print("\n📋 PASS 4: Generating asset manifest...")
+        asset_manifest = await self.generate_asset_manifest(
+            cache_name, full_text, blueprint, style, context_constraints, character_arcs
+        )
+
+        # Save asset manifest
         manifest_path = self.output_dir / f"{self.book_path.stem}_assets.json"
         with open(manifest_path, "w") as f:
             json.dump(asset_manifest, f, indent=2)
         print(f"✅ Asset manifest created: {manifest_path}")
 
-        # 4. Scriptwriter Pass (Parallel) - NOW WITH CONTEXT CONSTRAINTS
-        print(f"⚡ Starting Parallel Script Generation for {len(blueprint)} pages...")
+        # ========== PASS 5: Scriptwriter Pass (Parallel) ==========
+        print(f"\n⚡ PASS 5: Generating panel scripts for {len(blueprint)} pages...")
 
         tasks = [
-            self.write_page_script(item, style, context_constraints)
+            self.write_page_script(item, style, context_constraints, character_arcs, asset_manifest)
             for item in blueprint
         ]
 
-        # Execute all pages at once (bounded by scribe_limiter) with error handling
+        # Execute all pages at once (bounded by scribe_limiter)
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Separate successful scripts from failures
@@ -706,14 +1182,70 @@ class ScriptingAgent:
         if failed_pages:
             print(f"⚠️ {len(failed_pages)} page(s) failed during scripting: {failed_pages}")
 
-        # Sort by page number just in case
+        # Sort by page number
         full_script.sort(key=lambda x: x['page_number'])
+
+        # ========== PASS 6: Validation + Auto-Fix ==========
+        print("\n🔍 PASS 6: Validating and auto-fixing script...")
+
+        # Extract era from context_constraints for validation
+        era = ""
+        if context_constraints:
+            # Try to extract era from constraints (e.g., "Setting: 1860s...")
+            if "1860" in context_constraints or "Victorian" in context_constraints:
+                era = "1860s Victorian"
+            elif "1920" in context_constraints or "Art Deco" in context_constraints:
+                era = "1920s Art Deco"
+            elif "Medieval" in context_constraints or "medieval" in context_constraints:
+                era = "Medieval Fantasy"
+
+        fixed_script, validation_report = validate_and_autofix_script(
+            script=full_script,
+            era=era,
+            character_arcs=character_arcs,
+            assets=asset_manifest
+        )
+
+        # Save validation report
+        validation_path = self.output_dir / f"{self.book_path.stem}_validation.json"
+        with open(validation_path, "w") as f:
+            report_dict = {
+                "total_issues": validation_report.total_issues,
+                "auto_fixed": validation_report.auto_fixed,
+                "warnings": validation_report.warnings,
+                "manual_review": validation_report.manual_review,
+                "script_modified": validation_report.script_modified,
+                "issues": [
+                    {
+                        "issue_type": issue.issue_type,
+                        "page": issue.page,
+                        "panel": issue.panel,
+                        "severity": issue.severity,
+                        "description": issue.description,
+                        "fix_applied": issue.fix_applied,
+                        "original_value": issue.original_value,
+                        "fixed_value": issue.fixed_value
+                    }
+                    for issue in validation_report.issues
+                ]
+            }
+            json.dump(report_dict, f, indent=2)
+
+        print(f"✅ Validation complete: {validation_path}")
+        print(f"   Total issues: {validation_report.total_issues}")
+        print(f"   Auto-fixed: {validation_report.auto_fixed}")
+        print(f"   Manual review needed: {validation_report.manual_review}")
+
+        # Use fixed script if modifications were made
+        if validation_report.script_modified:
+            full_script = fixed_script
+            print("   Applied auto-fixes to script")
 
         # Save Final Script
         with open(output_file, "w") as f:
             json.dump(full_script, f, indent=2)
 
-        print(f"🎉 Script Generation Complete! Saved to: {output_file}")
+        print(f"\n🎉 Script Generation Complete! Saved to: {output_file}")
         return full_script
 
 if __name__ == "__main__":
