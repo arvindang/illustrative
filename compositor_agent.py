@@ -15,6 +15,30 @@ from ebooklib import epub
 from config import config
 from utils import get_tpm_limiter, estimate_tokens_for_text, extract_token_usage
 
+# Lazy client initialization with Vertex AI support
+_client = None
+_client_config = None
+
+def get_client():
+    """Returns a Gemini client, supporting both Vertex AI and API key modes."""
+    global _client, _client_config
+
+    # Determine current config state
+    current_config = (config.use_vertex_ai, config.gcp_project, config.gemini_api_key)
+
+    if _client is None or _client_config != current_config:
+        if config.use_vertex_ai:
+            _client = genai.Client(
+                vertexai=True,
+                project=config.gcp_project,
+                location=config.gcp_location
+            )
+        else:
+            _client = genai.Client(api_key=config.gemini_api_key)
+        _client_config = current_config
+    return _client
+
+
 class CompositorAgent:
     def __init__(self, script_path: str, base_output_dir: Path = None):
         self.script_path = Path(script_path)
@@ -369,8 +393,7 @@ class CompositorAgent:
         get_tpm_limiter().acquire_sync(batch_estimated)
 
         try:
-            client = genai.Client(api_key=config.gemini_api_key)
-            response = client.models.generate_content(
+            response = get_client().models.generate_content(
                 model=config.layout_model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -468,8 +491,7 @@ class CompositorAgent:
         get_tpm_limiter().acquire_sync(smart_estimated)
 
         try:
-            client = genai.Client(api_key=config.gemini_api_key)
-            response = client.models.generate_content(
+            response = get_client().models.generate_content(
                 model=config.layout_model,
                 contents=prompt,
                 config=types.GenerateContentConfig(

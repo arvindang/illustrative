@@ -16,16 +16,27 @@ from utils import (
 from config import config
 from validators import PanelValidator, ConsistencyAuditor, ContinuityValidator
 
-# Lazy client initialization for runtime API key support
+# Lazy client initialization with Vertex AI support
 _client = None
-_client_key = None
+_client_config = None
 
 def get_client():
-    """Returns a Gemini client, creating a new one if API key has changed."""
-    global _client, _client_key
-    if _client is None or _client_key != config.gemini_api_key:
-        _client = genai.Client(api_key=config.gemini_api_key)
-        _client_key = config.gemini_api_key
+    """Returns a Gemini client, supporting both Vertex AI and API key modes."""
+    global _client, _client_config
+
+    # Determine current config state
+    current_config = (config.use_vertex_ai, config.gcp_project, config.gemini_api_key)
+
+    if _client is None or _client_config != current_config:
+        if config.use_vertex_ai:
+            _client = genai.Client(
+                vertexai=True,
+                project=config.gcp_project,
+                location=config.gcp_location
+            )
+        else:
+            _client = genai.Client(api_key=config.gemini_api_key)
+        _client_config = current_config
     return _client
 
 # Image generation often has tighter RPM limits (e.g. 5-10 RPM)
