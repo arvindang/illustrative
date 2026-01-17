@@ -19,7 +19,13 @@ class PipelineConfig:
     """
 
     # ==================== API Configuration ====================
+    # Legacy Gemini API key (for backwards compatibility)
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+
+    # Vertex AI settings (recommended for production - no daily limits)
+    gcp_project: str = field(default_factory=lambda: os.getenv("GOOGLE_CLOUD_PROJECT", ""))
+    gcp_location: str = field(default_factory=lambda: os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
+    use_vertex_ai: bool = field(default_factory=lambda: os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true")
 
     # ==================== Database Configuration ====================
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", ""))
@@ -104,8 +110,14 @@ class PipelineConfig:
         """
         config = cls()
 
-        if not config.gemini_api_key:
-            print("Warning: GEMINI_API_KEY not set in environment")
+        # Check for valid API configuration (either Vertex AI or Gemini API key)
+        if config.use_vertex_ai:
+            if not config.gcp_project:
+                print("Warning: GOOGLE_CLOUD_PROJECT not set but GOOGLE_GENAI_USE_VERTEXAI=true")
+                return False
+            print(f"✓ Using Vertex AI (project: {config.gcp_project}, location: {config.gcp_location})")
+        elif not config.gemini_api_key:
+            print("Warning: Neither GEMINI_API_KEY nor Vertex AI configured")
             return False
 
         # Ensure output directories exist
