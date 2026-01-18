@@ -496,14 +496,11 @@ def render_dashboard():
     if st.session_state.user_email:
         st.caption(f"Logged in as {st.session_state.user_email}")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         if st.button("➕ New Novel", use_container_width=True, type="primary"):
             navigate_to('generate')
     with col2:
-        if st.button("🔑 API Key", use_container_width=True):
-            navigate_to('settings')
-    with col3:
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.user_id = None
             st.session_state.user_email = None
@@ -1096,16 +1093,13 @@ into a complete graphic novel with consistent character designs, dynamic panel l
 [GitHub Discussions](https://github.com/arvindang/illustrative-public/discussions) · Questions, feedback, and feature requests welcome
     """)
 
-    # API Key info - moved up for visibility
+    # Pricing/info section
     st.divider()
-    st.markdown("### Bring Your Own API Key")
+    st.markdown("### Free to Try")
     st.info("""
-This app requires a **Google Gemini API key** to generate graphic novels.
+**Create your first graphic novel free** — sign up and start generating.
 
-Get your free API key at [Google AI Studio](https://aistudio.google.com/apikey).
-Your key is encrypted and stored securely when you create an account.
-
-**Cost estimate**: ~$30 USD for a 100-page novel (varies by length and complexity).
+Full novels (100+ pages) use significant AI compute. Future pricing TBD based on usage.
     """)
 
     # Sample Preview Section
