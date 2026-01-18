@@ -220,6 +220,11 @@ class PipelineConfig:
     image_aspect_ratio: str = "4:3"
     reference_image_aspect_ratio: str = "1:1"
 
+    # ==================== Quota/Fallback Behavior ====================
+    # If True, stop pipeline when primary image model quota is exhausted
+    # If False, fallback to secondary models (default behavior)
+    stop_on_primary_quota_exhausted: bool = True
+
     # ==================== Image Composition Analysis ====================
     # LLM-based analysis of generated panels for smart cropping and bubble placement
     enable_image_composition_analysis: bool = True

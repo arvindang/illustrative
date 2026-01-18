@@ -68,6 +68,12 @@ def pytest_addoption(parser):
         default=False,
         help="Run in full production mode (disables test mode)"
     )
+    parser.addoption(
+        "--skip-validation",
+        action="store_true",
+        default=False,
+        help="Skip validation steps for faster testing (smoke test)"
+    )
 
 
 @pytest.fixture

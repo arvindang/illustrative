@@ -21,7 +21,7 @@ from google.genai import types
 from utils import (
     retry_with_backoff, RateLimiter, ProductionManifest,
     get_tpm_limiter, estimate_tokens_for_image, extract_token_usage,
-    get_client
+    get_client, PrimaryModelQuotaExhaustedError
 )
 from config import config
 
@@ -272,8 +272,14 @@ Analyze each candidate and respond with ONLY a JSON object:
                 response = None
                 last_error = None
 
-                for model in models_to_try:
+                # Debug: Log rate limiter state
+                tpm_limiter = get_tpm_limiter()
+                print(f"   📊 TPM: {tpm_limiter.get_current_usage():,}/{tpm_limiter.effective_limit:,} tokens")
+                print(f"   📊 Character RPM limit: {self.ref_limiter.rpm_limit}")
+
+                for model_idx, model in enumerate(models_to_try):
                     try:
+                        print(f"   🔄 Attempting model: {model}")
                         response = await get_client().aio.models.generate_content(
                             model=model,
                             contents=img_prompt,
@@ -282,14 +288,29 @@ Analyze each candidate and respond with ONLY a JSON object:
                                 image_config=types.ImageConfig(aspect_ratio="1:1")
                             )
                         )
+                        print(f"   ✓ Model {model} succeeded")
                         break
                     except Exception as e:
                         last_error = e
                         error_msg = str(e).lower()
-                        if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
-                            print(f"   Model {model} unavailable. Trying next...")
+                        is_quota_error = "429" in error_msg or "resource_exhausted" in error_msg
+                        is_not_found = "404" in error_msg or "not found" in error_msg
+
+                        if is_quota_error or is_not_found:
+                            error_type = "QUOTA EXHAUSTED (429)" if is_quota_error else "NOT FOUND (404)"
+                            print(f"   ⚠️ Model {model}: {error_type}")
+
+                            # Check if this is the primary model and config says to stop
+                            if model_idx == 0 and is_quota_error and config.stop_on_primary_quota_exhausted:
+                                print(f"\n🛑 STOPPING: Primary model '{model}' quota exhausted.")
+                                print(f"   Config: stop_on_primary_quota_exhausted=True")
+                                print(f"   Error details: {e}")
+                                raise PrimaryModelQuotaExhaustedError(model, str(e))
+
+                            print(f"   → Trying fallback model...")
                             continue
                         else:
+                            print(f"   ❌ Model {model} error (non-retryable): {e}")
                             raise e
 
                 if response is None:
@@ -406,8 +427,14 @@ Analyze each candidate and respond with ONLY a JSON object:
             response = None
             last_error = None
 
-            for model in models_to_try:
+            # Debug: Log rate limiter state
+            tpm_limiter = get_tpm_limiter()
+            print(f"   📊 TPM: {tpm_limiter.get_current_usage():,}/{tpm_limiter.effective_limit:,} tokens")
+            print(f"   📊 Object RPM limit: {self.ref_limiter.rpm_limit}")
+
+            for model_idx, model in enumerate(models_to_try):
                 try:
+                    print(f"   🔄 Attempting model: {model}")
                     response = await get_client().aio.models.generate_content(
                         model=model,
                         contents=img_prompt,
@@ -416,14 +443,29 @@ Analyze each candidate and respond with ONLY a JSON object:
                             image_config=types.ImageConfig(aspect_ratio="1:1")
                         )
                     )
+                    print(f"   ✓ Model {model} succeeded")
                     break
                 except Exception as e:
                     last_error = e
                     error_msg = str(e).lower()
-                    if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
-                        print(f"   Model {model} unavailable. Trying next...")
+                    is_quota_error = "429" in error_msg or "resource_exhausted" in error_msg
+                    is_not_found = "404" in error_msg or "not found" in error_msg
+
+                    if is_quota_error or is_not_found:
+                        error_type = "QUOTA EXHAUSTED (429)" if is_quota_error else "NOT FOUND (404)"
+                        print(f"   ⚠️ Model {model}: {error_type}")
+
+                        # Check if this is the primary model and config says to stop
+                        if model_idx == 0 and is_quota_error and config.stop_on_primary_quota_exhausted:
+                            print(f"\n🛑 STOPPING: Primary model '{model}' quota exhausted.")
+                            print(f"   Config: stop_on_primary_quota_exhausted=True")
+                            print(f"   Error details: {e}")
+                            raise PrimaryModelQuotaExhaustedError(model, str(e))
+
+                        print(f"   → Trying fallback model...")
                         continue
                     else:
+                        print(f"   ❌ Model {model} error (non-retryable): {e}")
                         raise e
 
             if response is None:

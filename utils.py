@@ -68,6 +68,14 @@ class APITimeoutError(Exception):
         super().__init__(message)
 
 
+class PrimaryModelQuotaExhaustedError(Exception):
+    """Raised when the primary image model (gemini-3-pro-image) quota is exhausted."""
+    def __init__(self, model_name: str, message: str = None):
+        self.model_name = model_name
+        msg = message or f"Primary model '{model_name}' quota exhausted (429 Resource Exhausted)"
+        super().__init__(msg)
+
+
 async def with_timeout(coro, timeout_seconds: int = 120, context: str = ""):
     """
     Wrap a coroutine with a timeout.
