@@ -100,15 +100,15 @@ async def with_timeout(coro, timeout_seconds: int = 120, context: str = ""):
         raise APITimeoutError(msg, operation=context, timeout=timeout_seconds)
 
 
-def retry_with_backoff(max_retries=5, initial_delay=2, max_delay=60, timeout_seconds=180):
+def retry_with_backoff(max_retries=7, initial_delay=5, max_delay=120, timeout_seconds=180):
     """
     Decorator for retrying async functions with exponential backoff, jitter, and timeout.
     Specifically targets 429 (ResourceExhausted) and 500/503 (Server Error).
 
     Args:
-        max_retries: Maximum number of retry attempts
-        initial_delay: Initial delay between retries in seconds
-        max_delay: Maximum delay between retries
+        max_retries: Maximum number of retry attempts (default 7 for better 429 recovery)
+        initial_delay: Initial delay between retries in seconds (default 5s for Vertex AI)
+        max_delay: Maximum delay between retries (default 120s for sustained 429s)
         timeout_seconds: Timeout for each individual attempt (default 180s = 3 minutes)
     """
     def decorator(func):
@@ -184,9 +184,9 @@ def calculate_dynamic_timeout(target_pages: int, base_timeout: int = 120, per_pa
 async def retry_api_call(
     func,
     *args,
-    max_retries: int = 5,
-    initial_delay: int = 2,
-    max_delay: int = 60,
+    max_retries: int = 7,
+    initial_delay: int = 5,
+    max_delay: int = 120,
     timeout_seconds: int = 180,
     **kwargs
 ):
@@ -198,9 +198,9 @@ async def retry_api_call(
     Args:
         func: Async function to call
         *args: Positional arguments for func
-        max_retries: Maximum retry attempts
-        initial_delay: Initial backoff delay in seconds
-        max_delay: Maximum backoff delay
+        max_retries: Maximum retry attempts (default 7 for better 429 recovery)
+        initial_delay: Initial backoff delay in seconds (default 5s for Vertex AI)
+        max_delay: Maximum backoff delay (default 120s for sustained 429s)
         timeout_seconds: Timeout for each attempt
         **kwargs: Keyword arguments for func
 
@@ -253,7 +253,10 @@ async def retry_api_call(
 
 class RateLimiter:
     """
-    A simple semaphore-based rate limiter to prevent exceeding RPM limits.
+    A semaphore-based rate limiter with jitter to prevent exceeding RPM limits.
+
+    Uses spacing + jitter to prevent synchronized bursts when multiple
+    coroutines release their permits at similar times.
     """
     def __init__(self, rpm_limit=15):
         self.semaphore = None
@@ -266,10 +269,12 @@ class RateLimiter:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        # We hold the semaphore for a bit to ensure we don't burst too fast
-        # (60 seconds / RPM) gives a rough spacing
+        # Hold the semaphore to ensure we don't burst too fast
+        # (60 seconds / RPM) gives base spacing
         spacing = 60.0 / self.rpm_limit
-        await asyncio.sleep(spacing)
+        # Add 30% jitter to prevent synchronized bursts at window boundaries
+        jitter = random.uniform(0, spacing * 0.3)
+        await asyncio.sleep(spacing + jitter)
         self.semaphore.release()
 
 

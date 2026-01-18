@@ -69,7 +69,7 @@ class PipelineConfig:
 
     # Vertex AI settings (recommended for production - no daily limits)
     gcp_project: str = field(default_factory=lambda: os.getenv("GOOGLE_CLOUD_PROJECT", ""))
-    gcp_location: str = field(default_factory=lambda: os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
+    gcp_location: str = field(default_factory=lambda: os.getenv("GOOGLE_CLOUD_LOCATION", "global"))
     use_vertex_ai: bool = field(default_factory=lambda: os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true")
 
     # ==================== Database Configuration ====================
@@ -143,11 +143,12 @@ class PipelineConfig:
     tpm_safety_margin: float = 0.85  # Use 85% of limit for safety buffer
     tpm_enabled: bool = True  # Can disable for testing
 
-    # Vertex AI rate limits (higher, adjust based on your actual quotas)
+    # Vertex AI rate limits (adjust based on your actual quotas)
     # See VERTEX_AI_QUESTIONS.md for quota lookup instructions
+    # NOTE: Gemini 3 Preview models have lower quotas (~2-5 RPM for images)
     vertex_scripting_rpm: int = 30
-    vertex_character_rpm: int = 10
-    vertex_image_rpm: int = 10
+    vertex_character_rpm: int = 2  # Lower for preview image models
+    vertex_image_rpm: int = 2      # Lower for preview image models
     vertex_tpm_limit: int = 4_000_000
 
     def get_effective_rate_limits(self) -> dict:
