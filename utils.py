@@ -8,6 +8,57 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Callable
 from google.api_core import exceptions
+from google import genai
+
+# ============================================================================
+# GEMINI CLIENT (Centralized - supports both Vertex AI and API key modes)
+# ============================================================================
+
+_client = None
+_client_config = None
+
+
+def get_client():
+    """
+    Returns a Gemini client, supporting both Vertex AI and API key modes.
+
+    Configuration is read from config.py:
+    - use_vertex_ai: If True, uses Vertex AI (requires GCP project + ADC)
+    - gcp_project: GCP project ID for Vertex AI
+    - gcp_location: GCP region (default: us-central1)
+    - gemini_api_key: API key for Google AI Studio (non-Vertex mode)
+
+    The client is cached and reused across calls. If config changes,
+    a new client is created.
+    """
+    global _client, _client_config
+
+    # Import config here to avoid circular import
+    from config import config
+
+    # Determine current config state
+    current_config = (config.use_vertex_ai, config.gcp_project, config.gemini_api_key)
+
+    if _client is None or _client_config != current_config:
+        if config.use_vertex_ai:
+            _client = genai.Client(
+                vertexai=True,
+                project=config.gcp_project,
+                location=config.gcp_location
+            )
+        else:
+            _client = genai.Client(api_key=config.gemini_api_key)
+        _client_config = current_config
+    return _client
+
+
+def reset_client():
+    """
+    Reset the cached client. Useful when config changes at runtime.
+    """
+    global _client, _client_config
+    _client = None
+    _client_config = None
 
 class APITimeoutError(Exception):
     """Custom timeout error with context for API operations."""
@@ -339,17 +390,25 @@ _global_tpm_limiter: Optional[TPMRateLimiter] = None
 
 
 def get_tpm_limiter() -> TPMRateLimiter:
-    """Get or create the global TPM limiter."""
+    """Get or create the global TPM limiter using effective rate limits."""
     global _global_tpm_limiter
     if _global_tpm_limiter is None:
         from config import config
-        tpm_limit = getattr(config, 'tpm_limit', 1_000_000)
+        # Use effective rate limits (adjusts for Vertex AI vs AI Studio)
+        effective_limits = config.get_effective_rate_limits()
+        tpm_limit = effective_limits.get('tpm_limit', 1_000_000)
         tpm_safety_margin = getattr(config, 'tpm_safety_margin', 0.85)
         _global_tpm_limiter = TPMRateLimiter(
             tpm_limit=tpm_limit,
             safety_margin=tpm_safety_margin
         )
     return _global_tpm_limiter
+
+
+def reset_tpm_limiter():
+    """Reset the global TPM limiter. Call when config changes."""
+    global _global_tpm_limiter
+    _global_tpm_limiter = None
 
 
 def estimate_tokens_for_text(prompt: str) -> int:
@@ -501,19 +560,20 @@ def get_manifest_progress(manifest_path: str) -> dict:
 
 def calculate_beat_density(beats: list, target_pages: int) -> dict:
     """
-    Calculates page allocation based on beat intensity.
+    Calculates page allocation based on beat intensity AND visual potential.
 
     Algorithm:
     1. Sum total intensity across all beats
     2. Calculate base pages per beat (target_pages / num_beats)
-    3. Adjust allocation based on intensity:
-       - High intensity beats (climax, crisis) get 1.5x pages
-       - Low intensity beats (transition) get 0.7x pages
+    3. Adjust allocation based on:
+       - Intensity: High intensity beats (climax, crisis) get more pages
+       - Visual Potential: High visual potential beats get more pages (they translate better)
+       - Scene Type: Action/visual scenes get more pages than dialogue-heavy scenes
     4. Ensure minimum 1 page per beat
-    5. Redistribute any rounding errors to highest-intensity beats
+    5. Redistribute any rounding errors to highest combined score beats
 
     Args:
-        beats: List of beat dicts with 'beat_id', 'beat_type', 'intensity'
+        beats: List of beat dicts with 'beat_id', 'beat_type', 'intensity', 'visual_potential'
         target_pages: Total pages to allocate
 
     Returns:
@@ -535,6 +595,22 @@ def calculate_beat_density(beats: list, target_pages: int) -> dict:
         "transition": 0.7
     }
 
+    # Visual potential modifiers (beats that translate well to comics get more pages)
+    visual_modifiers = {
+        (0.0, 0.3): 0.7,   # Low visual potential - compress
+        (0.3, 0.5): 0.85,  # Below average - slight compression
+        (0.5, 0.7): 1.0,   # Average - neutral
+        (0.7, 0.85): 1.15, # Good visual potential - expand slightly
+        (0.85, 1.0): 1.3,  # Excellent visual potential - expand significantly
+    }
+
+    def get_visual_modifier(visual_potential: float) -> float:
+        """Get the page modifier based on visual potential score."""
+        for (low, high), modifier in visual_modifiers.items():
+            if low <= visual_potential < high:
+                return modifier
+        return 1.0  # Default if visual_potential is exactly 1.0
+
     # Calculate total weighted intensity
     total_intensity = sum(b.get('intensity', 0.5) for b in beats)
     if total_intensity == 0:
@@ -546,16 +622,20 @@ def calculate_beat_density(beats: list, target_pages: int) -> dict:
         beat_id = beat.get('beat_id', 0)
         intensity = beat.get('intensity', 0.5)
         beat_type = beat.get('beat_type', 'rising')
+        visual_potential = beat.get('visual_potential', 0.5)
 
         # Weight by intensity relative to average
         weight = intensity / (total_intensity / len(beats)) if total_intensity > 0 else 1.0
 
         # Apply scene type modifier
-        modifier = scene_modifiers.get(beat_type, 1.0)
+        scene_modifier = scene_modifiers.get(beat_type, 1.0)
 
-        # Calculate pages for this beat
+        # Apply visual potential modifier
+        visual_modifier = get_visual_modifier(visual_potential)
+
+        # Calculate pages for this beat (combine all modifiers)
         base_pages = target_pages / len(beats)
-        allocated = max(1, round(base_pages * weight * modifier))
+        allocated = max(1, round(base_pages * weight * scene_modifier * visual_modifier))
         pages_allocation[beat_id] = allocated
 
     # Redistribute to match target exactly
@@ -563,8 +643,11 @@ def calculate_beat_density(beats: list, target_pages: int) -> dict:
     difference = target_pages - current_total
 
     if difference != 0:
-        # Sort beats by intensity (highest first for adding, lowest for removing)
-        sorted_beats = sorted(beats, key=lambda b: b.get('intensity', 0.5), reverse=difference > 0)
+        # Sort beats by combined score (intensity + visual_potential) for redistribution
+        def combined_score(b):
+            return b.get('intensity', 0.5) + b.get('visual_potential', 0.5)
+
+        sorted_beats = sorted(beats, key=combined_score, reverse=difference > 0)
         for i in range(abs(difference)):
             beat_id = sorted_beats[i % len(sorted_beats)].get('beat_id', i)
             if beat_id in pages_allocation:

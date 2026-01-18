@@ -43,15 +43,22 @@ class PipelineConfig:
     api_url: str = field(default_factory=lambda: os.getenv("API_URL", "http://localhost:8000"))
 
     # ==================== Model Selection ====================
-    # Text/Logic Models
-    scripting_model_global_context: str = "gemini-2.5-flash"
-    scripting_model_chapter_map: str = "gemini-2.5-flash"
-    scripting_model_page_script: str = "gemini-2.5-flash"
-    layout_model: str = "gemini-2.5-flash"
+    # Text/Logic Models (Pipeline Pass Models)
+    scripting_model_global_context: str = "gemini-2.5-flash"  # Pass 1: Beat Analysis, Pass 2: Director
+    scripting_model_chapter_map: str = "gemini-2.5-flash"      # Legacy
+    scripting_model_page_script: str = "gemini-2.5-flash"      # Pass 5: Scriptwriter
+    layout_model: str = "gemini-2.5-flash"                     # Compositor
+
+    # Additional Pass Models (can be tuned separately)
+    adaptation_filter_model: str = "gemini-2.5-flash"          # Pass 1.5: Adaptation Filter
+    character_deep_dive_model: str = "gemini-2.5-flash"        # Pass 3: Character Deep Dive
+    asset_manifest_model: str = "gemini-2.5-flash"             # Pass 4: Asset Manifest
+    validation_model: str = "gemini-2.5-flash"                 # Pass 6: Validation
 
     # Image Models (priority order for fallback)
-    image_model_primary: str = "nano-banana-pro-preview"
-    image_model_fallback: str = "gemini-3-pro-image-preview"
+    # Note: nano-banana-pro-preview is an AI Studio alias; Vertex AI requires official model names
+    image_model_primary: str = "gemini-3-pro-image-preview"
+    image_model_fallback: str = "gemini-2.5-flash-preview-image"
     image_model_last_resort: str = "gemini-2.5-flash-image"
 
     # Character Design Models
@@ -59,7 +66,8 @@ class PipelineConfig:
     character_model_image: str = "gemini-3-pro-image-preview"
 
     # ==================== Rate Limiting ====================
-    # Requests per minute (RPM)
+    # Requests per minute (RPM) - these are defaults, adjusted by get_effective_rate_limits()
+    # AI Studio defaults (conservative due to free tier limits)
     scripting_rpm: int = 5
     character_rpm: int = 5
     image_rpm: int = 5
@@ -68,6 +76,33 @@ class PipelineConfig:
     tpm_limit: int = 1_000_000  # Google's default TPM limit
     tpm_safety_margin: float = 0.85  # Use 85% of limit for safety buffer
     tpm_enabled: bool = True  # Can disable for testing
+
+    # Vertex AI rate limits (higher, adjust based on your actual quotas)
+    # See VERTEX_AI_QUESTIONS.md for quota lookup instructions
+    vertex_scripting_rpm: int = 30
+    vertex_character_rpm: int = 10
+    vertex_image_rpm: int = 10
+    vertex_tpm_limit: int = 4_000_000
+
+    def get_effective_rate_limits(self) -> dict:
+        """
+        Returns effective rate limits based on whether Vertex AI is enabled.
+        Vertex AI typically has higher quotas than AI Studio's free tier.
+        """
+        if self.use_vertex_ai:
+            return {
+                "scripting_rpm": self.vertex_scripting_rpm,
+                "character_rpm": self.vertex_character_rpm,
+                "image_rpm": self.vertex_image_rpm,
+                "tpm_limit": self.vertex_tpm_limit,
+            }
+        else:
+            return {
+                "scripting_rpm": self.scripting_rpm,
+                "character_rpm": self.character_rpm,
+                "image_rpm": self.image_rpm,
+                "tpm_limit": self.tpm_limit,
+            }
 
     # ==================== Page Allocation ====================
     # Word density thresholds (words per page)
@@ -81,6 +116,26 @@ class PipelineConfig:
     max_pages_production: int = 200
     recommended_max_pages: int = 150  # Quality/time sweet spot
     default_pages_test: int = 3
+
+    # ==================== Retry & Resilience ====================
+    max_page_retries: int = 2         # Max retries for failed page scripts
+    retry_delay_base: float = 2.0     # Base delay for retries (exponential backoff)
+
+    # ==================== Panel Layout Settings ====================
+    # Panel size configuration (percentage of page area)
+    panel_size_large_min_pct: int = 50   # Large panels take 50%+ of page
+    panel_size_medium_min_pct: int = 25  # Medium panels take 25-50%
+    panel_size_small_min_pct: int = 15   # Small panels take 15-25%
+
+    # Default panel counts based on scene type
+    default_panels_action: int = 5       # More panels for rapid action
+    default_panels_dialogue: int = 4     # Medium panels for conversation
+    default_panels_establishing: int = 3 # Fewer, larger panels for setting
+    default_panels_climax: int = 3       # Dramatic panels for climactic moments
+
+    # ==================== Spread & Cliffhanger Settings ====================
+    max_spreads_per_50_pages: int = 3    # Don't overuse two-page spreads
+    cliffhanger_pages_per_chapter: int = 3  # Aim for ~3 page-turn hooks per chapter
 
     # ==================== File Paths ====================
     output_dir: Path = Path("assets/output")
@@ -115,10 +170,23 @@ class PipelineConfig:
             if not config.gcp_project:
                 print("Warning: GOOGLE_CLOUD_PROJECT not set but GOOGLE_GENAI_USE_VERTEXAI=true")
                 return False
+
+            # Validate Vertex AI authentication
+            auth_valid, auth_msg = validate_vertex_ai_auth(config.gcp_project)
+            if not auth_valid:
+                print(f"Warning: Vertex AI auth check failed: {auth_msg}")
+                return False
+
             print(f"✓ Using Vertex AI (project: {config.gcp_project}, location: {config.gcp_location})")
+            limits = config.get_effective_rate_limits()
+            print(f"  Rate limits: {limits['scripting_rpm']} RPM (text), {limits['image_rpm']} RPM (image), {limits['tpm_limit']:,} TPM")
         elif not config.gemini_api_key:
             print("Warning: Neither GEMINI_API_KEY nor Vertex AI configured")
             return False
+        else:
+            print(f"✓ Using Gemini API key (AI Studio mode)")
+            limits = config.get_effective_rate_limits()
+            print(f"  Rate limits: {limits['scripting_rpm']} RPM (text), {limits['image_rpm']} RPM (image), {limits['tpm_limit']:,} TPM")
 
         # Ensure output directories exist
         for directory in [config.output_dir, config.characters_dir, config.objects_dir,
@@ -126,6 +194,47 @@ class PipelineConfig:
             directory.mkdir(parents=True, exist_ok=True)
 
         return True
+
+
+def validate_vertex_ai_auth(project_id: str = None) -> tuple:
+    """
+    Validate that Application Default Credentials (ADC) are configured for Vertex AI.
+
+    Args:
+        project_id: Optional GCP project ID to verify
+
+    Returns:
+        Tuple of (is_valid: bool, message: str)
+    """
+    try:
+        import google.auth
+        from google.auth import exceptions as auth_exceptions
+
+        credentials, detected_project = google.auth.default()
+
+        # Check if we have a project (either detected or provided)
+        effective_project = project_id or detected_project
+        if not effective_project:
+            return False, "No GCP project detected. Set GOOGLE_CLOUD_PROJECT or run: gcloud config set project YOUR_PROJECT"
+
+        # Try to get an access token to verify credentials are valid
+        if hasattr(credentials, 'refresh'):
+            try:
+                import google.auth.transport.requests
+                request = google.auth.transport.requests.Request()
+                credentials.refresh(request)
+            except auth_exceptions.RefreshError as e:
+                return False, f"Credentials refresh failed: {e}. Run: gcloud auth application-default login"
+
+        return True, f"ADC configured for project: {effective_project}"
+
+    except ImportError:
+        return False, "google-auth package not installed. Run: pip install google-auth"
+    except Exception as e:
+        error_msg = str(e)
+        if "Could not automatically determine credentials" in error_msg:
+            return False, "No Application Default Credentials found. Run: gcloud auth application-default login"
+        return False, f"Auth error: {error_msg}"
 
 
 # ==================== ERA CONSTRAINT TEMPLATES ====================

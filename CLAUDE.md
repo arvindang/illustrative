@@ -39,10 +39,13 @@ Handles final assembly and export:
 ## Key Technical Patterns
 
 ### API Management
+- **Dual Backend Support**: Works with both Google AI Studio (API key) and Vertex AI (GCP project)
+- Centralized client in `utils.py:get_client()` handles backend switching based on `GOOGLE_GENAI_USE_VERTEXAI` env var
 - All Gemini API calls use `retry_with_backoff()` decorator for handling 429/500/503 errors with exponential backoff
-- `RateLimiter` class (utils.py) implements semaphore-based RPM throttling (typically 5 RPM for image generation, higher for text)
+- `RateLimiter` class (utils.py) implements semaphore-based RPM throttling
+- Rate limits auto-adjust: AI Studio (5 RPM) vs Vertex AI (10-30 RPM based on quotas)
 - All API operations are async using `asyncio` for parallel processing
-- API key loaded from `.env` file via `GEMINI_API_KEY` environment variable
+- See `VERTEX_AI_QUESTIONS.md` for quota configuration and rate limit tuning
 
 ### State Management & Resume Capability
 - `ProductionManifest` (utils.py) tracks completion status of pages, panels, and characters
@@ -51,9 +54,13 @@ Handles final assembly and export:
 - Character deduplication registry prevents regenerating variants of the same character
 
 ### Model Configuration
-- Text/Logic: `gemini-3.0-flash` (2M context window) for scripting and analysis
-- Image: `gemini-3-pro-image-preview` primary, `gemini-2.5-flash-image` fallback
-- Character consistency uses Gemini's character consistency tags and reference images passed as PIL objects
+- Text/Logic: `gemini-2.5-flash` (2M context window) for scripting and analysis
+- Image generation (3-tier fallback):
+  1. Primary: `gemini-3-pro-image-preview` (highest quality, up to 4096px)
+  2. Fallback: `gemini-2.5-flash-preview-image`
+  3. Last resort: `gemini-2.5-flash-image` (1024px, fastest)
+- Character consistency uses reference images passed as PIL objects to image generation API
+- All model names are Vertex AI compatible (no AI Studio aliases)
 
 ### Directory Structure
 ```
@@ -91,9 +98,19 @@ pip install -r requirements.txt  # Note: requirements.txt may need to be created
 ```
 
 **Required environment variables (.env file):**
+
+Option 1 - AI Studio (simple, has daily limits):
 ```
 GEMINI_API_KEY=your_api_key_here
 ```
+
+Option 2 - Vertex AI (production, pay-per-use, no daily limits):
+```
+GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_GENAI_USE_VERTEXAI=true
+```
+Then run: `gcloud auth application-default login`
 
 ### Individual Agent Testing
 
@@ -102,11 +119,11 @@ GEMINI_API_KEY=your_api_key_here
 python smoke_test.py
 ```
 
-**Test character design:**
+**Test character/object reference generation:**
 ```python
-from character_architect import CharacterArchitect
-architect = CharacterArchitect("assets/output/script.json")
-await architect.design_all_characters(style="Botanical Illustration")
+from illustrator_agent import IllustratorAgent
+illustrator = IllustratorAgent(assets_path="assets/output/my_book_assets.json")
+await illustrator.generate_all_references(style="Botanical Illustration")
 ```
 
 ## Important Constraints

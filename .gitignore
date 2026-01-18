@@ -37,3 +37,9 @@ assets/input/**
 !assets/input/.gitkeep
 production_manifest.json
 *.log
+
+# Vertex AI / GCP credentials (NEVER commit these)
+vertex-ai-key.json
+*-key.json
+*.json.key
+service-account*.json

@@ -10,42 +10,26 @@ from dotenv import load_dotenv
 # Load .env BEFORE importing config
 load_dotenv()
 
-from google import genai
 from google.genai import types
 from utils import (
     retry_with_backoff, RateLimiter, get_tpm_limiter,
     estimate_tokens_for_text, estimate_tokens_for_cache, extract_token_usage,
     retry_api_call, calculate_dynamic_timeout, calculate_beat_density,
-    fix_era_anachronisms
+    fix_era_anachronisms, get_client
 )
 from config import config
 
-# Lazy client initialization with Vertex AI support
-_client = None
-_client_config = None
+# Rate limiter for the parallel script writing phase (lazy-initialized)
+# Uses effective rate limits based on Vertex AI vs AI Studio
+_scribe_limiter = None
 
-def get_client():
-    """Returns a Gemini client, supporting both Vertex AI and API key modes."""
-    global _client, _client_config
-
-    # Determine current config state
-    current_config = (config.use_vertex_ai, config.gcp_project, config.gemini_api_key)
-
-    if _client is None or _client_config != current_config:
-        if config.use_vertex_ai:
-            _client = genai.Client(
-                vertexai=True,
-                project=config.gcp_project,
-                location=config.gcp_location
-            )
-        else:
-            _client = genai.Client(api_key=config.gemini_api_key)
-        _client_config = current_config
-    return _client
-
-# Rate limiter for the parallel script writing phase
-# We can go higher here because we aren't generating images yet
-scribe_limiter = RateLimiter(rpm_limit=15)
+def get_scribe_limiter() -> RateLimiter:
+    """Get the scripting rate limiter with effective RPM based on config."""
+    global _scribe_limiter
+    if _scribe_limiter is None:
+        effective_limits = config.get_effective_rate_limits()
+        _scribe_limiter = RateLimiter(rpm_limit=effective_limits['scripting_rpm'])
+    return _scribe_limiter
 
 class ScriptingAgent:
     def __init__(self, book_path: str, base_output_dir: Path = None):
@@ -154,11 +138,17 @@ class ScriptingAgent:
     @retry_with_backoff()
     async def analyze_narrative_beats(self, cache_name: str, full_text_fallback: str, target_pages: int) -> dict:
         """
-        PASS 1: BEAT ANALYSIS
-        Analyzes the narrative structure and identifies story beats.
+        PASS 1: BEAT ANALYSIS (Enhanced)
+        Analyzes the narrative structure and identifies story beats with visual potential scoring.
 
         This pass breaks the novel into narrative beats with intensity scores,
-        identifies act structure, and calculates page allocation.
+        identifies act structure, calculates page allocation, and scores visual potential.
+
+        Key enhancements:
+        - visual_potential: How well each beat translates to visual storytelling
+        - adaptation_notes: What works visually vs textually
+        - suggested_focus: Specific visual moments to highlight
+        - micro_beats: Panel-level pacing suggestions within each beat
 
         Args:
             cache_name: Gemini context cache reference
@@ -166,18 +156,19 @@ class ScriptingAgent:
             target_pages: Target number of pages for allocation
 
         Returns:
-            BeatMap dict with beats, act_boundaries, pacing_recommendations
+            BeatMap dict with beats, act_boundaries, pacing_recommendations, hooks
         """
-        print(f"🎭 BEAT ANALYSIS PASS: Extracting narrative structure...")
+        print(f"🎭 BEAT ANALYSIS PASS: Extracting narrative structure with visual potential...")
 
         prompt = f"""
-        Act as a Story Structure Analyst for graphic novel adaptation.
+        Act as a Story Structure Analyst AND Visual Storytelling Expert for graphic novel adaptation.
 
         TASK:
         Analyze the source material and identify the key narrative BEATS.
         A beat is a significant story event that advances the plot or reveals character.
 
-        For a {target_pages}-page graphic novel, identify approximately {max(5, target_pages // 5)} major beats.
+        For a {target_pages}-page graphic novel, identify approximately {max(8, target_pages // 4)} major beats.
+        (More granular than traditional story beats - each beat should map to 3-5 pages)
 
         For EACH beat, provide:
         1. 'beat_id': Sequential integer starting from 1
@@ -192,9 +183,24 @@ class ScriptingAgent:
         6. 'emotional_tone': The dominant emotion (e.g., "tense", "melancholic", "triumphant")
         7. 'scene_type': One of: "action", "dialogue", "establishing", "montage", "flashback", "transition"
 
+        NEW - VISUAL ADAPTATION FIELDS:
+        8. 'visual_potential': Float from 0.0 to 1.0 indicating how well this beat translates to visual medium
+           - 0.0-0.3: Internal/abstract (thoughts, philosophy, internal monologue) - HARD to visualize
+           - 0.4-0.6: Mixed (conversation with some action) - MODERATE visual potential
+           - 0.7-0.8: Visual events (discoveries, arrivals, confrontations) - GOOD visual potential
+           - 0.9-1.0: Highly visual (action sequences, reveals, transformations) - EXCELLENT visual potential
+        9. 'adaptation_notes': Brief note on what to emphasize visually vs what to condense/cut
+        10. 'suggested_focus': List of 2-3 specific VISUAL MOMENTS worth highlighting as panels
+           (e.g., "Captain's face when he sees the creature", "The submarine emerging from darkness")
+        11. 'micro_beats': List of 3-6 panel-level micro-events within this beat
+           (Each micro_beat is a single panel-worthy moment)
+        12. 'is_page_turn_hook': Boolean - true if this beat should end on a page turn for suspense
+
         Also identify:
         - 'act_boundaries': Which beat_id ends Act 1 and Act 2 (for 3-act structure)
         - 'total_word_count': Approximate word count of source material
+        - 'hooks': List of beat_ids that are compelling "return" moments (cliffhangers, reveals)
+        - 'low_visual_warnings': List of beat_ids with visual_potential < 0.4 that may need creative adaptation
 
         OUTPUT: JSON object with the specified structure.
         """
@@ -233,9 +239,15 @@ class ScriptingAgent:
                                     "intensity": {"type": "NUMBER"},
                                     "key_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
                                     "emotional_tone": {"type": "STRING"},
-                                    "scene_type": {"type": "STRING"}
+                                    "scene_type": {"type": "STRING"},
+                                    # New visual adaptation fields
+                                    "visual_potential": {"type": "NUMBER"},
+                                    "adaptation_notes": {"type": "STRING"},
+                                    "suggested_focus": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "micro_beats": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "is_page_turn_hook": {"type": "BOOLEAN"}
                                 },
-                                "required": ["beat_id", "beat_type", "description", "intensity", "key_characters"]
+                                "required": ["beat_id", "beat_type", "description", "intensity", "key_characters", "visual_potential"]
                             }
                         },
                         "act_boundaries": {
@@ -244,7 +256,9 @@ class ScriptingAgent:
                                 "act_1_end": {"type": "INTEGER"},
                                 "act_2_end": {"type": "INTEGER"}
                             }
-                        }
+                        },
+                        "hooks": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                        "low_visual_warnings": {"type": "ARRAY", "items": {"type": "INTEGER"}}
                     },
                     "required": ["beats", "act_boundaries"]
                 }
@@ -275,11 +289,224 @@ class ScriptingAgent:
             beat_id = beat.get('beat_id', 0)
             beat['page_allocation'] = pages_per_beat.get(beat_id, 1)
 
+        # Log visual adaptation insights
+        hooks = beat_map.get('hooks', [])
+        low_visual = beat_map.get('low_visual_warnings', [])
+        high_visual_beats = [b for b in beats if b.get('visual_potential', 0) >= 0.7]
+
         print(f"✅ Identified {len(beats)} narrative beats")
         print(f"   Act 1 ends at beat {beat_map.get('act_boundaries', {}).get('act_1_end', '?')}")
         print(f"   Act 2 ends at beat {beat_map.get('act_boundaries', {}).get('act_2_end', '?')}")
+        print(f"   📷 High visual potential beats: {len(high_visual_beats)}/{len(beats)}")
+        if hooks:
+            print(f"   🎣 Page-turn hooks identified: beats {hooks}")
+        if low_visual:
+            print(f"   ⚠️  Low visual potential warnings: beats {low_visual} (may need creative adaptation)")
 
         return beat_map
+
+    @retry_with_backoff()
+    async def generate_adaptation_filter(self, cache_name: str, full_text_fallback: str, beat_map: dict, target_pages: int) -> dict:
+        """
+        PASS 1.5: ADAPTATION FILTER (NEW)
+        Identifies what content to cut, condense, or keep for the graphic novel adaptation.
+
+        This pass acts as an editorial filter, making creative decisions about:
+        - What scenes are ESSENTIAL and must be kept
+        - What scenes can be CONDENSED (merged or summarized visually)
+        - What scenes should be CUT entirely (internal monologue, repetitive content)
+        - What needs CREATIVE ADAPTATION (internal thoughts shown through expression/action)
+
+        Key insight: Not all prose translates well to visual storytelling. This pass
+        identifies natural "breaking points" and preserves what makes readers love the story.
+
+        Args:
+            cache_name: Gemini context cache reference
+            full_text_fallback: Full text if cache unavailable
+            beat_map: Beat analysis from Pass 1
+            target_pages: Target number of pages
+
+        Returns:
+            AdaptationFilter dict with scene classifications and recommendations
+        """
+        print(f"✂️  ADAPTATION FILTER: Identifying what to keep, condense, and cut...")
+
+        # Build beat summary for context
+        beats = beat_map.get('beats', [])
+        beat_summary = "\n".join([
+            f"  Beat {b['beat_id']}: {b['description']} (visual: {b.get('visual_potential', 0.5):.1f})"
+            for b in beats[:20]  # Limit to first 20 beats for prompt size
+        ])
+
+        prompt = f"""
+        Act as a Professional Graphic Novel Adapter and Editor.
+
+        You are adapting a novel into a {target_pages}-page graphic novel. Your job is to make
+        editorial decisions about what to KEEP, CONDENSE, or CUT.
+
+        BEAT ANALYSIS (from prior pass):
+{beat_summary}
+
+        TASK:
+        Analyze the source material and classify each major scene/sequence into:
+
+        1. 'essential_scenes': Scenes that MUST be kept (pivotal plot points, character-defining moments)
+           - For each: provide 'description', 'beat_ids' it covers, 'why_essential'
+
+        2. 'condensable_scenes': Scenes that can be merged or summarized
+           - For each: provide 'description', 'beat_ids', 'condensation_strategy'
+           - Strategies: "montage" (show time passing), "single_panel" (summarize in one image),
+             "merge_with" (combine with adjacent scene), "dialogue_summary" (one caption covers it)
+
+        3. 'cuttable_scenes': Scenes that should be CUT entirely
+           - For each: provide 'description', 'beat_ids', 'reason_to_cut'
+           - Reasons: "pure_internal" (unvisualizable thoughts), "redundant" (repeats earlier info),
+             "tangential" (doesn't advance main plot), "better_told_elsewhere" (info covered in other scenes)
+
+        4. 'creative_adaptations': Scenes that need creative visual translation
+           - For each: provide 'description', 'beat_ids', 'adaptation_strategy'
+           - Strategies: "show_through_expression" (internal state via facial/body language),
+             "visual_metaphor" (abstract concept as image), "flashback_panel" (brief memory image),
+             "environmental_storytelling" (show through setting details)
+
+        5. 'reader_beloved_moments': The 3-5 moments that fans would be MOST disappointed to miss
+           - These are non-negotiable MUST-INCLUDE moments regardless of visual potential
+
+        6. 'pacing_recommendations':
+           - 'slow_down': List of beat_ids that deserve more visual time (splash pages, etc.)
+           - 'speed_up': List of beat_ids that should move quickly (action montages, transitions)
+
+        7. 'natural_chapter_breaks': Suggested page numbers for natural "chapter" divisions
+           (Where a reader could put the book down and feel satisfied)
+
+        OUTPUT: JSON object with the specified structure.
+        Be ruthless but thoughtful - a great adaptation knows what to leave out.
+        """
+
+        model = config.scripting_model_global_context
+
+        if cache_name:
+            contents = [prompt]
+            cached_content = cache_name
+        else:
+            contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback[:80000]}"]
+            cached_content = None
+
+        # Acquire TPM capacity
+        estimated_tokens = estimate_tokens_for_text(prompt)
+        await get_tpm_limiter().acquire(estimated_tokens)
+
+        response = await get_client().aio.models.generate_content(
+            model=model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                cached_content=cached_content,
+                response_mime_type="application/json",
+                response_schema={
+                    "type": "OBJECT",
+                    "properties": {
+                        "essential_scenes": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "description": {"type": "STRING"},
+                                    "beat_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                                    "why_essential": {"type": "STRING"}
+                                },
+                                "required": ["description", "beat_ids", "why_essential"]
+                            }
+                        },
+                        "condensable_scenes": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "description": {"type": "STRING"},
+                                    "beat_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                                    "condensation_strategy": {"type": "STRING"}
+                                },
+                                "required": ["description", "beat_ids", "condensation_strategy"]
+                            }
+                        },
+                        "cuttable_scenes": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "description": {"type": "STRING"},
+                                    "beat_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                                    "reason_to_cut": {"type": "STRING"}
+                                },
+                                "required": ["description", "beat_ids", "reason_to_cut"]
+                            }
+                        },
+                        "creative_adaptations": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "description": {"type": "STRING"},
+                                    "beat_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                                    "adaptation_strategy": {"type": "STRING"}
+                                },
+                                "required": ["description", "beat_ids", "adaptation_strategy"]
+                            }
+                        },
+                        "reader_beloved_moments": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "description": {"type": "STRING"},
+                                    "beat_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                                    "why_beloved": {"type": "STRING"}
+                                },
+                                "required": ["description", "why_beloved"]
+                            }
+                        },
+                        "pacing_recommendations": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "slow_down": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                                "speed_up": {"type": "ARRAY", "items": {"type": "INTEGER"}}
+                            }
+                        },
+                        "natural_chapter_breaks": {"type": "ARRAY", "items": {"type": "INTEGER"}}
+                    },
+                    "required": ["essential_scenes", "condensable_scenes", "cuttable_scenes", "reader_beloved_moments"]
+                }
+            )
+        )
+
+        # Update TPM with actual usage
+        input_tokens, output_tokens = extract_token_usage(response)
+        get_tpm_limiter().update_actual_usage(estimated_tokens, input_tokens + output_tokens)
+
+        if response.parsed is None:
+            raise ValueError("Failed to parse adaptation filter from API response")
+
+        adaptation_filter = response.parsed
+
+        # Log summary
+        essential_count = len(adaptation_filter.get('essential_scenes', []))
+        condensable_count = len(adaptation_filter.get('condensable_scenes', []))
+        cuttable_count = len(adaptation_filter.get('cuttable_scenes', []))
+        beloved_count = len(adaptation_filter.get('reader_beloved_moments', []))
+
+        print(f"✅ Adaptation filter complete:")
+        print(f"   ✓ Essential scenes: {essential_count}")
+        print(f"   ↔ Condensable scenes: {condensable_count}")
+        print(f"   ✗ Cuttable scenes: {cuttable_count}")
+        print(f"   ❤️  Reader-beloved moments: {beloved_count}")
+
+        pacing = adaptation_filter.get('pacing_recommendations', {})
+        if pacing.get('slow_down'):
+            print(f"   🐢 Slow down for beats: {pacing['slow_down']}")
+        if pacing.get('speed_up'):
+            print(f"   🏃 Speed up through beats: {pacing['speed_up']}")
+
+        return adaptation_filter
 
     @retry_with_backoff()
     async def generate_character_deep_dive(self, cache_name: str, full_text_fallback: str, blueprint: list) -> dict:
@@ -332,6 +559,19 @@ class ScriptingAgent:
         7. 'relationships': Object mapping other character names to relationship types
            (e.g., "Captain Nemo": "mentor-student", "Ned Land": "reluctant-ally")
         8. 'key_moments': List of {{page, event, emotional_state, visual_change}} for major character beats
+
+        NEW - VOICE & DIALECT TRACKING (for dialogue consistency):
+        9. 'voice_profile': Object with:
+           - 'education_level': "erudite", "educated", "working_class", "uneducated"
+           - 'formality': "very_formal", "formal", "casual", "rough"
+           - 'vocabulary_style': Brief description (e.g., "scientific terminology", "nautical jargon", "simple direct")
+           - 'dialect_markers': List of speech patterns (e.g., "drops articles", "French accent shown via occasional French words", "uses 'ain't'")
+           - 'emotional_tells': How their speech changes under stress/excitement
+           - 'catchphrases': List of phrases they repeat (max 3)
+        10. 'dialogue_samples': List of 3-5 example dialogue lines that capture their voice
+            (These will be used as reference when writing their dialogue)
+        11. 'speech_contrast': How this character's speech differs from other main characters
+            (e.g., "More verbose than Ned Land", "Uses technical terms unlike other characters")
 
         Also provide 'scene_states' - a list of page-by-page character states for key pages:
         For each important scene transition (every 5-10 pages or major scene change):
@@ -399,7 +639,21 @@ class ScriptingAgent:
                                                 "visual_change": {"type": "STRING"}
                                             }
                                         }
-                                    }
+                                    },
+                                    # New voice/dialect tracking fields
+                                    "voice_profile": {
+                                        "type": "OBJECT",
+                                        "properties": {
+                                            "education_level": {"type": "STRING"},
+                                            "formality": {"type": "STRING"},
+                                            "vocabulary_style": {"type": "STRING"},
+                                            "dialect_markers": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                            "emotional_tells": {"type": "STRING"},
+                                            "catchphrases": {"type": "ARRAY", "items": {"type": "STRING"}}
+                                        }
+                                    },
+                                    "dialogue_samples": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "speech_contrast": {"type": "STRING"}
                                 },
                                 "required": ["name", "role", "distinctive_items"]
                             }
@@ -482,7 +736,7 @@ class ScriptingAgent:
         Ensure character designs incorporate these distinctive items and role characteristics.
         """
 
-        # Combined prompt for characters and objects
+        # Combined prompt for characters, objects, locations, and color palette
         combined_prompt = f"""
         Act as a Visual Development Artist for a '{style}' graphic novel.
         {era_block}
@@ -495,19 +749,31 @@ class ScriptingAgent:
         - occupation: e.g., "Sea Captain", "Professor"
         - distinctive_items: List of items they carry or wear (must be era-appropriate)
         - specific_era_markers: Specific historical fashion details (e.g., "Victorian high collar", "19th-century heavy wool coat")
+        - color_signature: 2-3 colors that define this character's visual identity (for consistency)
 
         Characters to design: {', '.join(characters)}
 
-        PART 2: KEY OBJECTS & LOCATIONS
-        Identify the top 3-5 most important RECURRING OBJECTS, VEHICLES, or LOCATIONS (e.g., 'The Nautilus') that need consistent visual design.
+        PART 2: KEY OBJECTS
+        Identify the top 3-5 most important RECURRING OBJECTS or VEHICLES that need consistent visual design.
         For each, provide:
         - name: Name of the object
         - description: Visual description (materials, textures, colors). Must be era-appropriate.
         - key_features: List of identifying shapes or mechanisms (era-appropriate technology)
-        - condition: The state of wear (e.g., "Pristine and polished", "Rusted and barnacle-encrusted", "Ancient and crumbling")
-        - material_context: Primary materials appropriate to the era (e.g., "Riveted iron and brass", "Bioluminescent organic matter")
+        - condition: The state of wear (e.g., "Pristine and polished", "Rusted and barnacle-encrusted")
+        - material_context: Primary materials appropriate to the era
 
-        PART 3: INTERACTION RULES
+        PART 3: RECURRING LOCATIONS (NEW)
+        Identify the top 5-8 RECURRING LOCATIONS/ENVIRONMENTS that appear multiple times and need consistent visual design.
+        For each location, provide:
+        - name: Name of the location (e.g., "The Nautilus Bridge", "Professor's Study", "Underwater Coral Gardens")
+        - description: Detailed visual description - architecture, lighting, atmosphere
+        - color_palette: List of 3-4 dominant colors for this location
+        - lighting: Typical lighting conditions (e.g., "Dim gas lamps with golden glow", "Bioluminescent blue-green")
+        - recurring_elements: List of props/details that should ALWAYS appear in this location
+        - mood: The emotional atmosphere (e.g., "Mysterious and claustrophobic", "Grand and awe-inspiring")
+        - era_markers: Period-specific architectural/design details
+
+        PART 4: INTERACTION RULES
         Define scene-specific requirements for visual consistency:
         - underwater_scenes: List requirements (e.g., "All characters MUST wear period diving equipment with brass helmets")
         - formal_scenes: List requirements (e.g., "Victorian evening wear, men in frock coats")
@@ -516,6 +782,14 @@ class ScriptingAgent:
 
         Also identify any 'forbidden_combinations' - things that should NEVER appear together:
         - Example: {{"characters": ["Professor Aronnax"], "items": ["modern SCUBA gear"], "reason": "anachronism"}}
+
+        PART 5: GLOBAL COLOR SCRIPT
+        Define the overall color direction for the graphic novel:
+        - primary_palette: List of 4-5 dominant colors for the entire work
+        - act_1_colors: Colors that dominate the beginning (before the adventure intensifies)
+        - act_2_colors: Colors for the middle (during the main conflict)
+        - act_3_colors: Colors for the climax and resolution
+        - color_associations: Object mapping emotions to colors (e.g., {{"danger": "deep red", "wonder": "teal blue"}})
 
         Be specific and visual for use in AI image generation.
         """
@@ -546,7 +820,8 @@ class ScriptingAgent:
                                     "age_range": {"type": "STRING"},
                                     "occupation": {"type": "STRING"},
                                     "distinctive_items": {"type": "ARRAY", "items": {"type": "STRING"}},
-                                    "specific_era_markers": {"type": "STRING"}
+                                    "specific_era_markers": {"type": "STRING"},
+                                    "color_signature": {"type": "ARRAY", "items": {"type": "STRING"}}
                                 },
                                 "required": ["name", "description"]
                             }
@@ -563,6 +838,22 @@ class ScriptingAgent:
                                     "material_context": {"type": "STRING"}
                                 },
                                 "required": ["name", "description"]
+                            }
+                        },
+                        "locations": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "name": {"type": "STRING"},
+                                    "description": {"type": "STRING"},
+                                    "color_palette": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "lighting": {"type": "STRING"},
+                                    "recurring_elements": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                    "mood": {"type": "STRING"},
+                                    "era_markers": {"type": "STRING"}
+                                },
+                                "required": ["name", "description", "lighting", "mood"]
                             }
                         },
                         "interaction_rules": {
@@ -584,9 +875,22 @@ class ScriptingAgent:
                                     "reason": {"type": "STRING"}
                                 }
                             }
+                        },
+                        "color_script": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "primary_palette": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "act_1_colors": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "act_2_colors": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "act_3_colors": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "color_associations": {
+                                    "type": "OBJECT",
+                                    "additionalProperties": {"type": "STRING"}
+                                }
+                            }
                         }
                     },
-                    "required": ["characters", "objects", "interaction_rules"]
+                    "required": ["characters", "objects", "locations", "interaction_rules"]
                 }
             )
         )
@@ -601,7 +905,12 @@ class ScriptingAgent:
             raise ValueError("Failed to parse combined asset manifest from API response")
 
         manifest = response.parsed
-        print(f"🛠️ Found {len(manifest['objects'])} key objects and {len(manifest['characters'])} characters.")
+        print(f"🛠️ Asset manifest complete:")
+        print(f"   👥 Characters: {len(manifest.get('characters', []))}")
+        print(f"   📦 Objects: {len(manifest.get('objects', []))}")
+        print(f"   🏠 Locations: {len(manifest.get('locations', []))}")
+        if manifest.get('color_script', {}).get('primary_palette'):
+            print(f"   🎨 Color palette: {', '.join(manifest['color_script']['primary_palette'][:4])}")
         return manifest
 
     # Threshold for chunked generation (pages above this get split into chunks)
@@ -618,7 +927,8 @@ class ScriptingAgent:
         style: str,
         context_constraints: str = "",
         previous_summary: str = "",
-        beat_guidance: str = ""
+        beat_guidance: str = "",
+        adaptation_guidance: str = ""
     ):
         """
         Generate a chunk of the blueprint (internal helper).
@@ -632,6 +942,8 @@ class ScriptingAgent:
             style: Art style
             context_constraints: Era/setting constraints
             previous_summary: Summary of what happened in previous chunks (for continuity)
+            beat_guidance: Beat-based pacing guidance
+            adaptation_guidance: Adaptation filter guidance (what to keep/cut)
         """
         chunk_size = end_page - start_page + 1
         is_first_chunk = start_page == 1
@@ -680,22 +992,46 @@ class ScriptingAgent:
         - This is pages {start_page}-{end_page} of a {total_pages}-page novel."""
 
         prompt = f"""
-        Act as a Master Graphic Novel Director.
+        Act as a Master Graphic Novel Director with deep understanding of comic book pacing.
 
         TASK:
         Generate pages {start_page} to {end_page} of a {total_pages}-PAGE Graphic Novel adaptation.
         {era_block}
         {continuity_block}
         {beat_guidance}
+        {adaptation_guidance}
         You must output a JSON list of exactly {chunk_size} items.
         Each item represents ONE PAGE and must define:
         1. 'page_number': Integer ({start_page} to {end_page}).
         2. 'summary': A 2-sentence summary of what happens on this page.
-        3. 'focus_text': A specific quote or 200-word excerpt from the source text that this page covers.
+        3. 'focus_text': 2-3 KEY VISUAL MOMENTS from the source text (not a 200-word excerpt).
+           Focus on moments that can be DRAWN: actions, expressions, settings.
         4. 'mood': The emotional tone (e.g., "Tense", "Melancholic").
         5. 'key_characters': List of characters present.
         6. 'visual_notes': Specific setting or lighting notes. Include era-appropriate details.
         7. 'scene_type': One of "action", "dialogue", "establishing", "montage", "flashback", "transition", "underwater", "formal"
+
+        NEW - SPREAD & PACING FIELDS:
+        8. 'is_spread': Boolean - true if this page should be a TWO-PAGE SPREAD (panoramic reveal, epic battle).
+           Use sparingly! Only 1-3 spreads per 50 pages. Spreads MUST be on EVEN page numbers (left page).
+        9. 'is_cliffhanger': Boolean - true if this page ends with a hook/reveal that makes readers turn the page.
+           IMPORTANT: Cliffhangers should land on ODD pages (right side) so the reveal is on the next turn.
+        10. 'page_turn_note': Brief guidance on reader experience at page turn (e.g., "Reveal the monster on next page",
+            "Pause before the decision", "Immediate action continues").
+        11. 'suggested_panel_count': Integer 3-6. Fewer panels = more dramatic weight per image.
+            Use 2-3 for climactic moments, 5-6 for rapid action/transitions.
+        12. 'recommended_splash': Boolean - true if one panel should dominate (60%+ of page).
+
+        SPREAD RULES:
+        - Spreads work best for: vast landscapes, epic reveals, battle panoramas, emotional climaxes
+        - A spread uses pages N (even) and N+1 (odd) as ONE image
+        - Mark ONLY the first page of the spread as is_spread=true
+        - The page AFTER a spread should be a quieter moment (pacing reset)
+
+        CLIFFHANGER RULES:
+        - Best cliffhangers: shocking reveals, danger moments, emotional decisions, mysterious arrivals
+        - Place cliffhangers on ODD page numbers (right side of spread when book is open)
+        - The NEXT page (even, left side) is what readers see first when turning
 
         CRITICAL PACING RULES:
         {pacing_rules}
@@ -735,7 +1071,13 @@ class ScriptingAgent:
                             "mood": {"type": "STRING"},
                             "key_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
                             "visual_notes": {"type": "STRING"},
-                            "scene_type": {"type": "STRING"}
+                            "scene_type": {"type": "STRING"},
+                            # New spread and pacing fields
+                            "is_spread": {"type": "BOOLEAN"},
+                            "is_cliffhanger": {"type": "BOOLEAN"},
+                            "page_turn_note": {"type": "STRING"},
+                            "suggested_panel_count": {"type": "INTEGER"},
+                            "recommended_splash": {"type": "BOOLEAN"}
                         },
                         "required": ["page_number", "summary", "focus_text", "key_characters", "scene_type"]
                     }
@@ -749,12 +1091,13 @@ class ScriptingAgent:
 
         return response.parsed
 
-    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str, context_constraints: str = "", beat_map: dict = None):
+    async def generate_pacing_blueprint(self, cache_name: str, full_text_fallback: str, target_pages: int, style: str, context_constraints: str = "", beat_map: dict = None, adaptation_filter: dict = None):
         """
         PASS 2: THE DIRECTOR
         Consumes the FULL BOOK (via cache) and outputs a page-by-page blueprint.
 
         Enhanced to use beat_map for intelligent page allocation and adds scene_type.
+        Now also uses adaptation_filter to know what to emphasize/cut.
 
         For large jobs (>40 pages), uses chunked generation to avoid API timeouts
         while maximizing use of Gemini's context cache.
@@ -766,6 +1109,7 @@ class ScriptingAgent:
             style: Art style
             context_constraints: Era/setting constraints
             beat_map: Optional beat analysis from Pass 1 for pacing guidance
+            adaptation_filter: Optional adaptation filter from Pass 1.5
         """
         print(f"🎬 DIRECTOR PASS: Creating {target_pages}-page blueprint...")
 
@@ -774,7 +1118,7 @@ class ScriptingAgent:
         if beat_map and beat_map.get('beats'):
             beats = beat_map['beats']
             beat_list = "\n".join([
-                f"  Beat {b['beat_id']}: {b['description']} ({b.get('page_allocation', 1)} pages, {b.get('beat_type', 'rising')})"
+                f"  Beat {b['beat_id']}: {b['description']} ({b.get('page_allocation', 1)} pages, {b.get('beat_type', 'rising')}, visual: {b.get('visual_potential', 0.5):.1f})"
                 for b in beats
             ])
             beat_guidance = f"""
@@ -783,8 +1127,51 @@ class ScriptingAgent:
 {beat_list}
 
         Use the page allocation to determine pacing. High-intensity beats (climax, crisis) get more pages.
+        Prioritize beats with high visual_potential scores.
         """
             print(f"   Using beat-based allocation from {len(beats)} beats")
+
+        # Build adaptation guidance if available
+        adaptation_guidance = ""
+        if adaptation_filter:
+            # Essential scenes to keep
+            essential = adaptation_filter.get('essential_scenes', [])
+            if essential:
+                essential_list = "\n".join([f"  - {s['description']}" for s in essential[:5]])
+                adaptation_guidance += f"""
+        MUST-KEEP SCENES (essential to the story):
+{essential_list}
+        """
+
+            # Scenes to condense
+            condensable = adaptation_filter.get('condensable_scenes', [])
+            if condensable:
+                condensable_list = "\n".join([f"  - {s['description']} → {s['condensation_strategy']}" for s in condensable[:5]])
+                adaptation_guidance += f"""
+        CONDENSE THESE SCENES (use suggested strategy):
+{condensable_list}
+        """
+
+            # Reader-beloved moments
+            beloved = adaptation_filter.get('reader_beloved_moments', [])
+            if beloved:
+                beloved_list = "\n".join([f"  - {s['description']}" for s in beloved])
+                adaptation_guidance += f"""
+        FAN-FAVORITE MOMENTS (must include, make visually stunning):
+{beloved_list}
+        """
+
+            # Pacing recommendations
+            pacing = adaptation_filter.get('pacing_recommendations', {})
+            slow_down = pacing.get('slow_down', [])
+            speed_up = pacing.get('speed_up', [])
+            if slow_down or speed_up:
+                adaptation_guidance += f"""
+        PACING NOTES:
+        - Slow down for beats: {slow_down if slow_down else 'none'}
+        - Speed through beats: {speed_up if speed_up else 'none'}
+        """
+            print(f"   Using adaptation filter (essential: {len(essential)}, beloved: {len(beloved)})")
 
         # Determine if we need chunked generation
         if target_pages <= self.CHUNK_THRESHOLD:
@@ -803,6 +1190,7 @@ class ScriptingAgent:
                 context_constraints,
                 "",  # no previous summary
                 beat_guidance,  # beat guidance from analysis
+                adaptation_guidance,  # adaptation filter guidance
                 timeout_seconds=timeout
             )
             return blueprint
@@ -838,6 +1226,7 @@ class ScriptingAgent:
                 context_constraints,
                 previous_summary,
                 beat_guidance,  # beat guidance from analysis
+                adaptation_guidance,  # adaptation filter guidance
                 timeout_seconds=timeout
             )
 
@@ -846,10 +1235,10 @@ class ScriptingAgent:
 
             full_blueprint.extend(chunk_blueprint)
 
-            # Build summary for next chunk (last 3-5 pages of current chunk)
-            recent_pages = chunk_blueprint[-min(5, len(chunk_blueprint)):]
-            previous_summary = " | ".join([
-                f"Page {p['page_number']}: {p['summary']}"
+            # Build enhanced summary for next chunk (last 8 pages with more detail)
+            recent_pages = chunk_blueprint[-min(8, len(chunk_blueprint)):]
+            previous_summary = "\n".join([
+                f"Page {p['page_number']}: {p['summary']} (Characters: {', '.join(p.get('key_characters', []))}, Mood: {p.get('mood', 'neutral')}, Scene: {p.get('scene_type', 'dialogue')})"
                 for p in recent_pages
             ])
 
@@ -924,22 +1313,50 @@ class ScriptingAgent:
             {chr(10).join(f'  - {r}' for r in scene_rules)}
             """
 
-        async with scribe_limiter:
-            print(f"✍️  Scripting Page {page_num} ({scene_type})...")
+        # Extract blueprint pacing hints
+        suggested_panel_count = blueprint_item.get('suggested_panel_count', 4)
+        recommended_splash = blueprint_item.get('recommended_splash', False)
+        is_spread = blueprint_item.get('is_spread', False)
+        is_cliffhanger = blueprint_item.get('is_cliffhanger', False)
+
+        # Build location context from assets if available
+        location_context = ""
+        if assets and assets.get('locations'):
+            # Find relevant location based on scene type and visual notes
+            visual_notes = blueprint_item.get('visual_notes', '').lower()
+            for loc in assets['locations']:
+                loc_name = loc.get('name', '').lower()
+                if loc_name in visual_notes or any(elem.lower() in visual_notes for elem in loc.get('recurring_elements', [])):
+                    location_context = f"""
+            LOCATION: {loc.get('name')}
+            - Lighting: {loc.get('lighting')}
+            - Mood: {loc.get('mood')}
+            - MUST include: {', '.join(loc.get('recurring_elements', [])[:5])}
+            - Color palette: {', '.join(loc.get('color_palette', [])[:3])}
+            """
+                    break
+
+        async with get_scribe_limiter():
+            print(f"✍️  Scripting Page {page_num} ({scene_type}, {suggested_panel_count} panels)...")
 
             prompt = f"""
-            Act as a Graphic Novel Scriptwriter.
+            Act as a Graphic Novel Scriptwriter with expertise in CINEMATIC VISUAL STORYTELLING.
 
             TASK:
             Write the panel-by-panel script for PAGE {page_num}.
             {era_block}
             {scene_context}
             {interaction_context}
+            {location_context}
             BLUEPRINT FOR THIS PAGE:
             Summary: {blueprint_item['summary']}
             Mood: {blueprint_item['mood']}
             Visual Notes: {blueprint_item.get('visual_notes', '')}
             Scene Type: {scene_type}
+            Suggested Panel Count: {suggested_panel_count}
+            Recommended Splash Panel: {recommended_splash}
+            Is Two-Page Spread: {is_spread}
+            Is Cliffhanger: {is_cliffhanger}
 
             STYLE: {style}
 
@@ -947,30 +1364,42 @@ class ScriptingAgent:
             "{focus_text}"
 
             INSTRUCTIONS:
-            1. Break this page into 3-6 panels based on the SOURCE TEXT.
+            1. Break this page into {suggested_panel_count} panels {'(with one LARGE splash panel)' if recommended_splash else ''}.
             2. Use 'visual_description' for the artist (cinematic, detailed, era-appropriate).
-            3. Use 'dialogue' for character speech ONLY:
+            3. CRITICAL - For EACH panel, specify:
+               - 'shot_type': One of:
+                 * "establishing" - Wide shot showing full environment/setting
+                 * "wide" - Full body shots, action scenes, multiple characters
+                 * "medium" - Waist-up, good for dialogue and interaction
+                 * "close-up" - Head and shoulders, emotional moments, reveals
+                 * "extreme-close-up" - Eyes, hands, details - maximum drama
+                 * "over-shoulder" - Looking over one character at another
+                 * "two-shot" - Two characters framed together
+                 * "birds-eye" - Looking down from above
+                 * "worms-eye" - Looking up from below (heroic/imposing)
+               - 'panel_size': One of "large" (50%+ of page), "medium" (25-50%), "small" (15-25%)
+                 * Use "large" for dramatic reveals, action climaxes, establishing shots
+                 * Use "small" for rapid action sequences, reactions, transitions
+            4. Use 'dialogue' for character speech ONLY:
                - MAXIMUM 80 characters per dialogue field
                - Short, punchy speech bubbles only
-               - NO stage directions like (SFX), (Internal Monologue), (whispers)
-               - NO sound effects in dialogue
-               - Use proper punctuation: ONE exclamation OR question mark, never "...!" or "?!"
-               - If dialogue is interrupted, use em-dash: "Wait—" NOT "Wait...!"
-               - Each speech bubble should be ONE complete thought from ONE speaker
-               - NO combining multiple speakers in one dialogue field
-            4. Use 'caption' for narration boxes:
-               - MAXIMUM 100 characters per caption
-               - Brief, evocative narration only
-               - Third-person perspective for narration
-            5. If a character has internal thoughts, put them in 'caption' NOT 'dialogue'.
-            6. Ensure visual continuity with the blueprint notes.
-            7. Use 'key_objects' to list important recurring items/vehicles present (e.g., ['The Nautilus', 'Harpoon']).
-            8. For EACH panel, provide a STRUCTURED 'advice' object with:
-               - 'scene_type': "{scene_type}" (must match page scene type)
-               - 'required_gear': Object mapping character names to list of required gear
-               - 'era_constraints': List of era-specific requirements for this panel
-               - 'continuity': Object with 'from_previous' and 'to_next' descriptions
-               - 'composition': Object with 'negative_space' position for text overlay
+               - NO stage directions, NO sound effects
+               - If dialogue is interrupted, use em-dash: "Wait—"
+            5. Use 'caption' for narration boxes (MAXIMUM 100 chars)
+            6. For EACH panel, provide a STRUCTURED 'advice' object with:
+               - 'scene_type': "{scene_type}"
+               - 'required_gear': Object mapping character names to gear list
+               - 'era_constraints': Era-specific requirements
+               - 'continuity': {{'from_previous': "...", 'to_next': "..."}}
+               - 'composition': {{'negative_space': "top-left|top-right|bottom-left|bottom-right"}}
+
+            PACING RULES:
+            {'- This page should have ONE dominant splash panel (large) with supporting smaller panels.' if recommended_splash else ''}
+            {'- This is a TWO-PAGE SPREAD - the image extends across both pages. Make it EPIC.' if is_spread else ''}
+            {'- This page ends on a CLIFFHANGER - the final panel should be dramatic/tense!' if is_cliffhanger else ''}
+            - Vary shot types for visual interest (don't use same shot type consecutively)
+            - Start scenes with establishing/wide shots, then move closer for emotional beats
+            - Use close-ups for reactions and extreme-close-ups sparingly for maximum impact
 
             OUTPUT FORMAT: JSON.
             """
@@ -1004,6 +1433,15 @@ class ScriptingAgent:
                                         "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
                                         "key_objects": {"type": "ARRAY", "items": {"type": "STRING"}},
                                         "bubble_position": {"type": "STRING", "enum": ["top-left", "top-right", "bottom-left", "bottom-right", "caption-box"]},
+                                        # New cinematic fields
+                                        "shot_type": {
+                                            "type": "STRING",
+                                            "enum": ["establishing", "wide", "medium", "close-up", "extreme-close-up", "over-shoulder", "two-shot", "birds-eye", "worms-eye"]
+                                        },
+                                        "panel_size": {
+                                            "type": "STRING",
+                                            "enum": ["large", "medium", "small"]
+                                        },
                                         "advice": {
                                             "type": "OBJECT",
                                             "properties": {
@@ -1032,7 +1470,7 @@ class ScriptingAgent:
                                             }
                                         }
                                     },
-                                    "required": ["panel_id", "visual_description", "characters", "advice"]
+                                    "required": ["panel_id", "visual_description", "characters", "shot_type", "panel_size", "advice"]
                                 }
                             }
                         },
@@ -1131,10 +1569,22 @@ class ScriptingAgent:
         print(f"✅ Beat analysis complete: {beats_path}")
         print(f"   Found {len(beat_map.get('beats', []))} narrative beats")
 
+        # ========== PASS 1.5: Adaptation Filter ==========
+        print("\n✂️  PASS 1.5: Running adaptation filter...")
+        adaptation_filter = await self.generate_adaptation_filter(
+            cache_name, full_text, beat_map, target_pages
+        )
+
+        # Save adaptation filter
+        filter_path = self.output_dir / f"{self.book_path.stem}_adaptation.json"
+        with open(filter_path, "w") as f:
+            json.dump(adaptation_filter, f, indent=2)
+        print(f"✅ Adaptation filter complete: {filter_path}")
+
         # ========== PASS 2: Director Pass (Blueprint) ==========
         print("\n🎬 PASS 2: Generating pacing blueprint...")
         blueprint = await self.generate_pacing_blueprint(
-            cache_name, full_text, target_pages, style, context_constraints, beat_map
+            cache_name, full_text, target_pages, style, context_constraints, beat_map, adaptation_filter
         )
 
         # Save blueprint
@@ -1176,22 +1626,62 @@ class ScriptingAgent:
             for item in blueprint
         ]
 
-        # Execute all pages at once (bounded by scribe_limiter)
+        # Execute all pages at once (bounded by get_scribe_limiter())
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Separate successful scripts from failures
         full_script = []
         failed_pages = []
+        failed_blueprints = {}  # Map page_num to blueprint item for retry
+
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 page_num = blueprint[i].get('page_number', i + 1)
                 print(f"   ❌ Page {page_num} script failed: {result}")
                 failed_pages.append(page_num)
+                failed_blueprints[page_num] = blueprint[i]
             else:
                 full_script.append(result)
 
+        # RETRY LOGIC: Attempt to regenerate failed pages (up to 2 retries)
+        MAX_RETRIES = 2
+        retry_count = 0
+
+        while failed_pages and retry_count < MAX_RETRIES:
+            retry_count += 1
+            print(f"\n🔄 Retry attempt {retry_count}/{MAX_RETRIES} for {len(failed_pages)} failed page(s)...")
+
+            # Create retry tasks for failed pages
+            retry_tasks = [
+                self.write_page_script(
+                    failed_blueprints[page_num],
+                    style,
+                    context_constraints,
+                    character_arcs,
+                    asset_manifest
+                )
+                for page_num in failed_pages
+            ]
+
+            # Execute retry tasks with a small delay between each
+            retry_results = await asyncio.gather(*retry_tasks, return_exceptions=True)
+
+            # Process retry results
+            still_failed = []
+            for i, result in enumerate(retry_results):
+                page_num = failed_pages[i]
+                if isinstance(result, Exception):
+                    print(f"   ❌ Page {page_num} retry {retry_count} failed: {result}")
+                    still_failed.append(page_num)
+                else:
+                    print(f"   ✅ Page {page_num} succeeded on retry {retry_count}")
+                    full_script.append(result)
+
+            failed_pages = still_failed
+
         if failed_pages:
-            print(f"⚠️ {len(failed_pages)} page(s) failed during scripting: {failed_pages}")
+            print(f"⚠️ {len(failed_pages)} page(s) still failed after {MAX_RETRIES} retries: {failed_pages}")
+            print("   These pages will be missing from the final script. Consider re-running the pipeline.")
 
         # Sort by page number
         full_script.sort(key=lambda x: x['page_number'])
