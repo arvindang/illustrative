@@ -87,6 +87,24 @@ class PipelineConfig:
     # ==================== API URL (for Streamlit to call FastAPI) ====================
     api_url: str = field(default_factory=lambda: os.getenv("API_URL", "http://localhost:8000"))
 
+    # ==================== Access Control ====================
+    # Comma-separated list of admin emails allowed to register/login
+    # When set, only these emails can access the app
+    admin_emails: str = field(default_factory=lambda: os.getenv("ADMIN_EMAILS", ""))
+
+    def get_admin_emails(self) -> set:
+        """Returns set of admin emails (lowercase). Empty set means open access."""
+        if not self.admin_emails:
+            return set()
+        return {email.strip().lower() for email in self.admin_emails.split(",") if email.strip()}
+
+    def is_admin_email(self, email: str) -> bool:
+        """Check if email is an admin. Returns True if no admin restriction is set."""
+        admin_set = self.get_admin_emails()
+        if not admin_set:
+            return True  # No restriction
+        return email.strip().lower() in admin_set
+
     # ==================== Model Selection ====================
     # Text/Logic Models (Pipeline Pass Models)
     scripting_model_global_context: str = "gemini-2.5-flash"  # Pass 1: Beat Analysis, Pass 2: Director

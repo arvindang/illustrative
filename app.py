@@ -434,6 +434,8 @@ def render_login_page():
         if submitted:
             if not email or not password:
                 st.error("Please enter email and password")
+            elif not config.is_admin_email(email):
+                st.error("Access restricted. Contact administrator for access.")
             else:
                 success, result = db_login(email, password)
                 if success:
@@ -456,6 +458,15 @@ def render_login_page():
 def render_register_page():
     """Registration page."""
     st.title("📝 Create Account")
+
+    # Check if registration is restricted
+    if config.get_admin_emails():
+        st.warning("🔒 Registration is currently invite-only.")
+        st.caption("Contact the administrator if you need access.")
+        st.divider()
+        if st.button("← Back to Home", use_container_width=True):
+            navigate_to('home')
+        return
 
     with st.form("register_form"):
         email = st.text_input("Email")
