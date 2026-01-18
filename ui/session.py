@@ -23,6 +23,13 @@ def init_session_state():
         'pipeline_complete': False,
         'output_paths': {},
         'current_novel_id': None,
+
+        # Prescan/cost estimation state
+        'prescan_complete': False,
+        'prescan_running': False,
+        'prescan_characters': [],
+        'prescan_objects': [],
+        'prescan_file_hash': None,  # Track which file was scanned
     }
     for key, val in defaults.items():
         if key not in st.session_state:

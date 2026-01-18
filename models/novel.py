@@ -1,6 +1,6 @@
 """GraphicNovel model for tracking user's generated novels."""
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean, Float
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -42,6 +42,10 @@ class GraphicNovel(Base):
     pdf_storage_key = Column(String(512), nullable=True)
     epub_storage_key = Column(String(512), nullable=True)
 
+    # Cost tracking
+    estimated_cost = Column(Float, nullable=True)  # Pre-processing estimate
+    actual_cost = Column(Float, nullable=True)     # Actual cost after processing
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -73,6 +77,9 @@ class GraphicNovel(Base):
             "has_epub": self.epub_storage_key is not None,
             "pdf_storage_key": self.pdf_storage_key,
             "epub_storage_key": self.epub_storage_key,
+            # Cost tracking
+            "estimated_cost": self.estimated_cost,
+            "actual_cost": self.actual_cost,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }

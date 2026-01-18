@@ -97,3 +97,55 @@ class DownloadUrlResponse(BaseModel):
 class MessageResponse(BaseModel):
     """Generic message response."""
     message: str
+
+
+# ==================== Cost Estimation Schemas ====================
+
+class PrescanRequest(BaseModel):
+    """Pre-scan request for character/object extraction."""
+    content: str  # Document text content
+    max_chars: int = 50000  # Limit for prescan (saves tokens)
+
+
+class PrescanResponse(BaseModel):
+    """Pre-scan response with extracted entities."""
+    word_count: int
+    character_names: list[str]
+    object_names: list[str]
+    recommended_pages: int
+    prescan_cost: float  # Cost of prescan operation
+
+
+class CostBreakdownResponse(BaseModel):
+    """Detailed cost breakdown."""
+    prescan: float
+    scripting_input: float
+    scripting_output: float
+    cache_savings: float
+    image_generation: float
+    character_refs: float
+    object_refs: float
+    composition_analysis: float
+
+
+class CostEstimateRequest(BaseModel):
+    """Cost estimation request."""
+    word_count: int
+    page_count: Optional[int] = None  # Auto-calculated if not provided
+    num_characters: Optional[int] = None  # From prescan or heuristic
+    num_objects: Optional[int] = None  # From prescan or heuristic
+    margin_percent: Optional[float] = 0.10  # Default 10%
+
+
+class CostEstimateResponse(BaseModel):
+    """Full cost estimate response."""
+    word_count: int
+    estimated_pages: int
+    estimated_panels: int
+    characters: int
+    objects: int
+    breakdown: CostBreakdownResponse
+    subtotal_vertex: float
+    margin_fee: float
+    margin_percent: float
+    total_cost: float

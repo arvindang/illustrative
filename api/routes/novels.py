@@ -11,6 +11,11 @@ from api.schemas import (
     NovelListResponse,
     DownloadUrlResponse,
     MessageResponse,
+    PrescanRequest,
+    PrescanResponse,
+    CostEstimateRequest,
+    CostEstimateResponse,
+    CostBreakdownResponse,
 )
 from api.dependencies import get_db, get_current_user
 from models.user import User
@@ -201,3 +206,202 @@ async def get_download_url(
     download_url = storage.generate_presigned_url(storage_key, expiration=3600)
 
     return DownloadUrlResponse(download_url=download_url, expires_in=3600)
+
+
+# ==================== Cost Estimation Endpoints ====================
+
+@router.post("/prescan", response_model=PrescanResponse)
+async def prescan_document(
+    request: PrescanRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Quick scan to extract characters and objects for cost estimation.
+
+    This uses a lightweight LLM call (~$0.01) to identify named characters
+    and key objects from the document. More accurate than heuristics.
+    """
+    from utils import calculate_page_count, get_client
+    from cost_calculator import PRESCAN_COST
+    from google import genai
+
+    content = request.content[:request.max_chars]  # Limit for token savings
+    word_count = len(content.split())
+
+    # Calculate recommended pages
+    page_info = calculate_page_count(word_count)
+    recommended_pages = page_info['recommended']
+
+    # Quick extraction prompt
+    prompt = f"""Analyze this text excerpt and extract:
+1. CHARACTER_NAMES: List all named characters (people with names, not generic descriptions)
+2. KEY_OBJECTS: List important recurring objects, vehicles, or locations that appear multiple times
+
+Text (first {len(content)} characters):
+---
+{content}
+---
+
+Respond in this exact format:
+CHARACTERS: Name1, Name2, Name3
+OBJECTS: Object1, Object2, Object3
+
+If none found, write "CHARACTERS: None" or "OBJECTS: None"."""
+
+    try:
+        client = get_client()
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash",  # Use fast model for prescan
+            contents=prompt,
+        )
+
+        # Parse response
+        text = response.text.strip()
+        characters = []
+        objects = []
+
+        for line in text.split('\n'):
+            line = line.strip()
+            if line.startswith('CHARACTERS:'):
+                chars_str = line.replace('CHARACTERS:', '').strip()
+                if chars_str.lower() != 'none':
+                    characters = [c.strip() for c in chars_str.split(',') if c.strip()]
+            elif line.startswith('OBJECTS:'):
+                objs_str = line.replace('OBJECTS:', '').strip()
+                if objs_str.lower() != 'none':
+                    objects = [o.strip() for o in objs_str.split(',') if o.strip()]
+
+        return PrescanResponse(
+            word_count=word_count,
+            character_names=characters,
+            object_names=objects,
+            recommended_pages=recommended_pages,
+            prescan_cost=PRESCAN_COST,
+        )
+
+    except Exception as e:
+        # Fallback to heuristics if LLM fails
+        from cost_calculator import (
+            estimate_characters_from_word_count,
+            estimate_objects_from_word_count,
+        )
+
+        num_chars = estimate_characters_from_word_count(word_count)
+        num_objs = estimate_objects_from_word_count(word_count)
+
+        return PrescanResponse(
+            word_count=word_count,
+            character_names=[f"Character {i+1}" for i in range(num_chars)],
+            object_names=[f"Object {i+1}" for i in range(num_objs)],
+            recommended_pages=recommended_pages,
+            prescan_cost=0.0,  # No cost if LLM failed
+        )
+
+
+@router.post("/estimate-cost", response_model=CostEstimateResponse)
+async def estimate_cost(
+    request: CostEstimateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Calculate estimated processing cost with detailed breakdown.
+
+    Returns the estimated Vertex AI cost plus a margin fee.
+    Use /prescan first for more accurate character/object counts,
+    or provide them directly if known.
+    """
+    from cost_calculator import (
+        estimate_total_cost,
+        estimate_characters_from_word_count,
+        estimate_objects_from_word_count,
+        DEFAULT_MARGIN_PERCENT,
+    )
+    from utils import calculate_page_count
+
+    # Determine page count
+    if request.page_count:
+        page_count = request.page_count
+    else:
+        page_info = calculate_page_count(request.word_count)
+        page_count = page_info['recommended']
+
+    # Determine character/object counts (use heuristics if not provided)
+    num_characters = request.num_characters
+    if num_characters is None:
+        num_characters = estimate_characters_from_word_count(request.word_count)
+
+    num_objects = request.num_objects
+    if num_objects is None:
+        num_objects = estimate_objects_from_word_count(request.word_count)
+
+    margin = request.margin_percent if request.margin_percent is not None else DEFAULT_MARGIN_PERCENT
+
+    # Calculate estimate
+    estimate = estimate_total_cost(
+        word_count=request.word_count,
+        page_count=page_count,
+        num_characters=num_characters,
+        num_objects=num_objects,
+        margin_percent=margin,
+        include_prescan=True,
+    )
+
+    return CostEstimateResponse(
+        word_count=estimate.word_count,
+        estimated_pages=estimate.pages,
+        estimated_panels=estimate.panels,
+        characters=estimate.characters,
+        objects=estimate.objects,
+        breakdown=CostBreakdownResponse(
+            prescan=estimate.breakdown.prescan,
+            scripting_input=estimate.breakdown.scripting_input,
+            scripting_output=estimate.breakdown.scripting_output,
+            cache_savings=estimate.breakdown.cache_savings,
+            image_generation=estimate.breakdown.image_generation,
+            character_refs=estimate.breakdown.character_refs,
+            object_refs=estimate.breakdown.object_refs,
+            composition_analysis=estimate.breakdown.composition_analysis,
+        ),
+        subtotal_vertex=estimate.subtotal_vertex,
+        margin_fee=estimate.margin_fee,
+        margin_percent=estimate.margin_percent,
+        total_cost=estimate.total_cost,
+    )
+
+
+@router.get("/estimate-cost/quick", response_model=CostEstimateResponse)
+async def quick_estimate_cost(
+    word_count: int,
+    page_count: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Quick cost estimate using heuristics only (no prescan needed).
+
+    Faster but less accurate than POST /estimate-cost with prescan data.
+    """
+    from cost_calculator import quick_estimate, CostBreakdownResponse
+
+    estimate = quick_estimate(word_count=word_count, page_count=page_count)
+
+    return CostEstimateResponse(
+        word_count=estimate.word_count,
+        estimated_pages=estimate.pages,
+        estimated_panels=estimate.panels,
+        characters=estimate.characters,
+        objects=estimate.objects,
+        breakdown=CostBreakdownResponse(
+            prescan=estimate.breakdown.prescan,
+            scripting_input=estimate.breakdown.scripting_input,
+            scripting_output=estimate.breakdown.scripting_output,
+            cache_savings=estimate.breakdown.cache_savings,
+            image_generation=estimate.breakdown.image_generation,
+            character_refs=estimate.breakdown.character_refs,
+            object_refs=estimate.breakdown.object_refs,
+            composition_analysis=estimate.breakdown.composition_analysis,
+        ),
+        subtotal_vertex=estimate.subtotal_vertex,
+        margin_fee=estimate.margin_fee,
+        margin_percent=estimate.margin_percent,
+        total_cost=estimate.total_cost,
+    )

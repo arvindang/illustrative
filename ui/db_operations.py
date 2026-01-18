@@ -140,15 +140,29 @@ def db_list_novels(user_id: str) -> list[dict]:
         return []
 
 
-def db_create_novel(user_id: str, title: str, source_filename: str, art_style: str, tone: str, page_count: int) -> Optional[str]:
-    """Create novel record."""
+def db_create_novel(
+    user_id: str,
+    title: str,
+    source_filename: str,
+    art_style: str,
+    tone: str,
+    page_count: int,
+    estimated_cost: Optional[float] = None
+) -> Optional[str]:
+    """Create novel record with optional cost estimate."""
     db = get_db()
     if db is None:
         return None
     try:
         novel = GraphicNovel(
-            user_id=user_id, title=title, source_filename=source_filename,
-            art_style=art_style, narrative_tone=tone, page_count=page_count, status="processing"
+            user_id=user_id,
+            title=title,
+            source_filename=source_filename,
+            art_style=art_style,
+            narrative_tone=tone,
+            page_count=page_count,
+            status="processing",
+            estimated_cost=estimated_cost,
         )
         db.add(novel)
         db.commit()
