@@ -230,7 +230,7 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
         Scene Type: {scene_type}
         Suggested Panel Count: {suggested_panel_count}
         Recommended Splash Panel: {recommended_splash}
-        Is Two-Page Spread: {is_spread}
+        Is Full-Bleed Page: {is_spread}
         Is Cliffhanger: {is_cliffhanger}
 
         STYLE: {style}
@@ -272,7 +272,7 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
 
         PACING RULES:
         {'- This page should have ONE dominant splash panel (large) with supporting smaller panels.' if recommended_splash else ''}
-        {'- This is a TWO-PAGE SPREAD - the image extends across both pages. Make it EPIC.' if is_spread else ''}
+        {'- This is a FULL-BLEED PAGE - a single dramatic image covering the entire page. Make it EPIC and cinematic!' if is_spread else ''}
         {'- This page ends on a CLIFFHANGER - the final panel should be dramatic/tense!' if is_cliffhanger else ''}
         - Vary shot types for visual interest (don't use same shot type consecutively)
         - Start scenes with establishing/wide shots, then move closer for emotional beats
@@ -308,6 +308,13 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
             raise ValueError(f"Failed to parse script for page {page_num}")
 
         result['page_number'] = page_num
+
+        # Preserve blueprint layout metadata for downstream agents (LayoutAgent, Compositor)
+        result['recommended_splash'] = recommended_splash
+        result['is_full_bleed'] = is_spread  # Renamed: "spread" → "full_bleed" for digital (single page)
+        result['is_cliffhanger'] = is_cliffhanger
+        result['suggested_panel_count'] = suggested_panel_count
+        result['scene_type'] = scene_type
 
         # Enforce text length limits (safety net if LLM doesn't follow instructions)
         MAX_DIALOGUE_CHARS = 120  # Raised from 80 for better flow

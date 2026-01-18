@@ -67,42 +67,92 @@ class LayoutAgent:
         Batch-generates layouts for ALL pages in a single API call.
         Stores results in self._layout_cache for use during assembly.
 
+        Now includes story-driven layout signals from the scripting pipeline:
+        - recommended_splash: One panel should dominate (60%+ of page)
+        - is_full_bleed: Single dramatic full-page image
+        - is_cliffhanger: Final panel should be emphasized
+        - panel_size: Per-panel size hints (large/medium/small)
+        - shot_type: Cinematic framing context
+
         Args:
             script_data: List of page dictionaries from script
         """
         if not config.gemini_api_key:
-            print("Warning: No API key found. Using grid layouts for all pages.")
+            print("Warning: No API key found. Using story-aware grid layouts for all pages.")
+            # Use story-aware fallback instead of returning early
+            for page in script_data:
+                page_num = page['page_number']
+                panels = page['panels']
+                panel_hints = [
+                    {
+                        'panel_size': p.get('panel_size', 'medium'),
+                        'shot_type': p.get('shot_type', 'medium')
+                    }
+                    for p in panels
+                ]
+                self._layout_cache[page_num] = self.calculate_story_aware_layout(
+                    num_panels=len(panels),
+                    panel_hints=panel_hints,
+                    recommended_splash=page.get('recommended_splash', False),
+                    is_full_bleed=page.get('is_full_bleed', False),
+                    is_cliffhanger=page.get('is_cliffhanger', False)
+                )
             return
 
-        print(f"Batch-generating layouts for {len(script_data)} pages...")
+        print(f"Batch-generating story-aware layouts for {len(script_data)} pages...")
 
-        # Build context for all pages
+        # Build enriched context for all pages with story signals
         all_pages_context = []
         for page in script_data:
             page_num = page['page_number']
             panels = page['panels']
-            panel_summaries = []
+
+            # Build detailed panel info with layout hints
+            panel_details = []
             for p in panels:
-                desc = p.get('visual_description', '')[:100]
-                panel_summaries.append(f"Panel {p['panel_id']}: {desc}")
+                panel_details.append({
+                    "panel_id": p['panel_id'],
+                    "panel_size": p.get('panel_size', 'medium'),  # large/medium/small
+                    "shot_type": p.get('shot_type', 'medium'),    # establishing/close-up/etc
+                    "description": p.get('visual_description', '')[:120]
+                })
+
             all_pages_context.append({
                 "page_number": page_num,
                 "panel_count": len(panels),
-                "panel_summaries": panel_summaries
+                "scene_type": page.get('scene_type', 'dialogue'),
+                # Story-driven layout signals from blueprint
+                "recommended_splash": page.get('recommended_splash', False),
+                "is_full_bleed": page.get('is_full_bleed', False),
+                "is_cliffhanger": page.get('is_cliffhanger', False),
+                "panels": panel_details
             })
 
         prompt = f"""
-        Act as an expert Comic Book Layout Artist.
-        Design layouts for {len(script_data)} pages of a graphic novel.
+        Act as an expert Comic Book Layout Artist for a DIGITAL graphic novel (readers see one page at a time).
+        Design layouts for {len(script_data)} pages.
 
-        PAGE SUMMARIES:
+        PAGE DATA (includes story-driven layout signals):
         {json.dumps(all_pages_context, indent=2)}
 
-        REQUIREMENTS:
-        1. For each page, output a layout with normalized coordinates (0.0 to 1.0).
-        2. Emphasize important panels by making them larger.
-        3. Ensure reading flow: Left->Right, Top->Bottom.
-        4. Each page's panels must cover the full page (sum to 1.0 in both dimensions).
+        STORY-DRIVEN LAYOUT RULES (CRITICAL):
+        1. **recommended_splash=true**: ONE panel MUST occupy 60%+ of the page area. This is a dramatic moment.
+        2. **is_full_bleed=true**: Create a SINGLE full-page panel (1 panel covering entire page). Epic/climactic moment.
+        3. **is_cliffhanger=true**: The FINAL panel should be larger/emphasized (bottom-right position, dramatic sizing).
+        4. **panel_size hints**: Use these to determine relative sizes:
+           - "large": 50%+ of page area (dramatic reveals, action climaxes, establishing shots)
+           - "medium": 25-50% of page area (standard storytelling)
+           - "small": 15-25% of page area (rapid action, reactions, transitions)
+        5. **shot_type context**:
+           - "establishing"/"wide": Often larger panels to show environment
+           - "close-up"/"extreme-close-up": Can be smaller but impactful
+           - "birds-eye"/"worms-eye": Often benefit from larger sizing for dramatic effect
+
+        GENERAL LAYOUT PRINCIPLES:
+        - Ensure reading flow: Left→Right, Top→Bottom (manga-style right-to-left is NOT used)
+        - Vary panel shapes for visual interest (not all rectangles the same aspect ratio)
+        - Coordinates are normalized (0.0 to 1.0), will be scaled to pixel dimensions
+        - Each page's panels must tile the full page (no gaps, no overlaps)
 
         OUTPUT FORMAT:
         JSON object with page_number as key:
@@ -365,6 +415,242 @@ class LayoutAgent:
                 y = row * (h_third + g)
                 layout.append((0, y, w_half, h_third))
                 layout.append((w_half + g, y, w_half, h_third))
+
+        return layout
+
+    def calculate_story_aware_layout(
+        self,
+        num_panels: int,
+        panel_hints: List[Dict] = None,
+        recommended_splash: bool = False,
+        is_full_bleed: bool = False,
+        is_cliffhanger: bool = False
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Story-aware fallback layout that uses panel_size hints and page-level signals.
+
+        Unlike the basic calculate_layout(), this method:
+        - Respects panel_size (large/medium/small) hints from the scriptwriter
+        - Handles recommended_splash (one dominant 60%+ panel)
+        - Handles is_full_bleed (single full-page panel)
+        - Handles is_cliffhanger (emphasize final panel)
+
+        Args:
+            num_panels: Number of panels
+            panel_hints: List of dicts with 'panel_size' and 'shot_type' per panel
+            recommended_splash: If True, one panel should dominate (60%+)
+            is_full_bleed: If True, create single full-page layout
+            is_cliffhanger: If True, emphasize the final panel
+
+        Returns:
+            List of (x, y, width, height) tuples in pixels
+        """
+        W = self.page_width - (2 * self.margin)
+        H = self.page_height - (2 * self.margin)
+        g = self.gutter
+
+        # Full bleed: single panel covering entire page
+        if is_full_bleed or num_panels == 1:
+            return [(0, 0, W, H)]
+
+        # No hints? Fall back to standard grid
+        if not panel_hints:
+            return self.calculate_layout(num_panels)
+
+        # Find the "large" panel index (splash candidate)
+        large_idx = None
+        for i, hint in enumerate(panel_hints):
+            if hint.get('panel_size') == 'large':
+                large_idx = i
+                break
+
+        # If recommended_splash but no explicit large panel, make the first panel large
+        if recommended_splash and large_idx is None:
+            large_idx = 0
+
+        # If cliffhanger and no large panel marked, make the LAST panel larger
+        if is_cliffhanger and large_idx is None:
+            large_idx = num_panels - 1
+
+        # Splash layout: one dominant panel + smaller supporting panels
+        if large_idx is not None and num_panels >= 2:
+            return self._splash_layout(num_panels, large_idx, W, H, g)
+
+        # Count panel sizes to determine layout strategy
+        size_counts = {'large': 0, 'medium': 0, 'small': 0}
+        for hint in panel_hints:
+            size = hint.get('panel_size', 'medium')
+            size_counts[size] = size_counts.get(size, 0) + 1
+
+        # If mostly small panels (rapid action), use tighter grid
+        if size_counts['small'] >= num_panels * 0.6:
+            return self._action_grid_layout(num_panels, W, H, g)
+
+        # Default: use standard grid layout
+        return self.calculate_layout(num_panels)
+
+    def _splash_layout(
+        self,
+        num_panels: int,
+        splash_idx: int,
+        W: int,
+        H: int,
+        g: int
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Create a layout with one dominant splash panel (60%+ of page).
+
+        The splash panel gets the majority of the page, with remaining panels
+        arranged in the leftover space.
+
+        Args:
+            num_panels: Total number of panels
+            splash_idx: Index of the splash panel (0-based)
+            W: Available width (after margins)
+            H: Available height (after margins)
+            g: Gutter size
+
+        Returns:
+            List of (x, y, width, height) tuples
+        """
+        layout = [None] * num_panels
+        other_panels = [i for i in range(num_panels) if i != splash_idx]
+
+        if num_panels == 2:
+            # 2 panels: splash on top (65%), other on bottom (35%)
+            splash_h = int(H * 0.65)
+            other_h = H - splash_h - g
+
+            if splash_idx == 0:
+                layout[0] = (0, 0, W, splash_h)
+                layout[1] = (0, splash_h + g, W, other_h)
+            else:
+                layout[0] = (0, 0, W, other_h)
+                layout[1] = (0, other_h + g, W, splash_h)
+
+        elif num_panels == 3:
+            # 3 panels: splash takes 60% height, other 2 split bottom row
+            splash_h = int(H * 0.60)
+            other_h = H - splash_h - g
+            w_half = (W - g) // 2
+
+            if splash_idx == 0:
+                layout[0] = (0, 0, W, splash_h)
+                layout[1] = (0, splash_h + g, w_half, other_h)
+                layout[2] = (w_half + g, splash_h + g, w_half, other_h)
+            elif splash_idx == 2:
+                # Splash at bottom (cliffhanger style)
+                layout[0] = (0, 0, w_half, other_h)
+                layout[1] = (w_half + g, 0, w_half, other_h)
+                layout[2] = (0, other_h + g, W, splash_h)
+            else:
+                # Middle panel is splash - unusual but handle it
+                layout[0] = (0, 0, W, other_h // 2)
+                layout[1] = (0, other_h // 2 + g, W, splash_h)
+                layout[2] = (0, other_h // 2 + splash_h + 2 * g, W, other_h // 2)
+
+        elif num_panels == 4:
+            # 4 panels: splash takes 60% on left or top, others arranged in remaining space
+            splash_w = int(W * 0.60)
+            other_w = W - splash_w - g
+            h_third = (H - 2 * g) // 3
+
+            if splash_idx == 0:
+                # Splash on left, 3 panels stacked on right
+                layout[0] = (0, 0, splash_w, H)
+                for i, idx in enumerate(other_panels):
+                    layout[idx] = (splash_w + g, i * (h_third + g), other_w, h_third)
+            elif splash_idx == 3:
+                # Splash at bottom-right (cliffhanger)
+                h_top = int(H * 0.40)
+                h_bottom = H - h_top - g
+                w_half = (W - g) // 2
+                layout[0] = (0, 0, w_half, h_top)
+                layout[1] = (w_half + g, 0, w_half, h_top)
+                layout[2] = (0, h_top + g, w_half, h_bottom)
+                layout[3] = (w_half + g, h_top + g, w_half, h_bottom)
+                # Make splash larger by adjusting
+                layout[3] = (int(W * 0.35) + g, h_top + g, int(W * 0.65) - g, h_bottom)
+                layout[2] = (0, h_top + g, int(W * 0.35), h_bottom)
+            else:
+                # Default: splash on top spanning full width
+                splash_h = int(H * 0.55)
+                other_h = H - splash_h - g
+                w_third = (W - 2 * g) // 3
+                layout[splash_idx] = (0, 0, W, splash_h)
+                remaining = [i for i in range(num_panels) if i != splash_idx]
+                for i, idx in enumerate(remaining):
+                    layout[idx] = (i * (w_third + g), splash_h + g, w_third, other_h)
+
+        else:
+            # 5+ panels: splash takes top 55%, others in grid below
+            splash_h = int(H * 0.55)
+            other_h = H - splash_h - g
+
+            layout[splash_idx] = (0, 0, W, splash_h)
+
+            # Arrange remaining panels in rows below
+            remaining = other_panels
+            cols = min(3, len(remaining))
+            rows = (len(remaining) + cols - 1) // cols
+            cell_w = (W - (cols - 1) * g) // cols
+            cell_h = (other_h - (rows - 1) * g) // rows
+
+            for i, idx in enumerate(remaining):
+                row = i // cols
+                col = i % cols
+                x = col * (cell_w + g)
+                y = splash_h + g + row * (cell_h + g)
+                layout[idx] = (x, y, cell_w, cell_h)
+
+        return layout
+
+    def _action_grid_layout(
+        self,
+        num_panels: int,
+        W: int,
+        H: int,
+        g: int
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Tighter grid layout for rapid action sequences (many small panels).
+
+        Creates a denser grid with more panels per row for fast-paced scenes.
+
+        Args:
+            num_panels: Number of panels
+            W: Available width
+            H: Available height
+            g: Gutter size
+
+        Returns:
+            List of (x, y, width, height) tuples
+        """
+        layout = []
+
+        if num_panels <= 4:
+            # 2x2 grid
+            cols, rows = 2, 2
+        elif num_panels <= 6:
+            # 3x2 grid
+            cols, rows = 3, 2
+        elif num_panels <= 9:
+            # 3x3 grid
+            cols, rows = 3, 3
+        else:
+            # 4x3 or more
+            cols = 4
+            rows = (num_panels + cols - 1) // cols
+
+        cell_w = (W - (cols - 1) * g) // cols
+        cell_h = (H - (rows - 1) * g) // rows
+
+        for i in range(num_panels):
+            row = i // cols
+            col = i % cols
+            x = col * (cell_w + g)
+            y = row * (cell_h + g)
+            layout.append((x, y, cell_w, cell_h))
 
         return layout
 

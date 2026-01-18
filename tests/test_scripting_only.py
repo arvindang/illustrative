@@ -44,7 +44,7 @@ class TestScriptingOnly:
     """Test suite for ScriptingAgent JSON generation."""
 
     @pytest.mark.asyncio
-    async def test_generate_script(self, input_file, style, tone, test_mode, target_pages, script_path):
+    async def test_generate_script(self, input_file, style, tone, test_mode, target_pages, script_path, base_output_dir):
         """
         Test that ScriptingAgent generates valid script JSON.
 
@@ -66,11 +66,12 @@ class TestScriptingOnly:
         print(f"Tone:        {tone}")
         print(f"Test Mode:   {test_mode}")
         print(f"Pages:       {target_pages}")
-        print(f"Output:      {script_path}")
+        print(f"Output Dir:  {base_output_dir}")
+        print(f"Script:      {script_path}")
         print(f"{'='*60}\n")
 
-        # Initialize and run scripting agent
-        scripter = ScriptingAgent(input_file)
+        # Initialize and run scripting agent with isolated output directory
+        scripter = ScriptingAgent(input_file, base_output_dir=base_output_dir)
         script = await scripter.generate_script(
             style=f"{style}, {tone}",
             test_mode=test_mode,
@@ -92,9 +93,8 @@ class TestScriptingOnly:
                 assert "panel_id" in panel, "Panel missing panel_id"
                 assert "visual_description" in panel, "Panel missing visual_description"
 
-        # Verify output files exist
+        # Verify output files exist in the isolated output directory
         input_stem = Path(input_file).stem
-        output_dir = Path("assets/output")
 
         expected_files = [
             f"{input_stem}_assets.json",
@@ -106,9 +106,9 @@ class TestScriptingOnly:
         script_file = Path(script_path)
         assert script_file.exists(), f"Script file not found: {script_path}"
 
-        # Check supporting files
+        # Check supporting files in the isolated output directory
         for filename in expected_files:
-            filepath = output_dir / filename
+            filepath = base_output_dir / filename
             # These files are generated in different passes, log status
             if filepath.exists():
                 print(f"  [OK] {filename}")
@@ -120,10 +120,10 @@ class TestScriptingOnly:
         print(f"Total panels: {total_panels}")
 
     @pytest.mark.asyncio
-    async def test_script_json_validity(self, input_file, style, tone, test_mode, script_path):
+    async def test_script_json_validity(self, input_file, style, tone, test_mode, script_path, base_output_dir):
         """Test that generated script JSON is valid and parseable."""
-        # First generate the script
-        scripter = ScriptingAgent(input_file)
+        # First generate the script with isolated output directory
+        scripter = ScriptingAgent(input_file, base_output_dir=base_output_dir)
         await scripter.generate_script(
             style=f"{style}, {tone}",
             test_mode=test_mode
@@ -155,6 +155,8 @@ class TestScriptingOnly:
 # Allow running as standalone script
 if __name__ == "__main__":
     import argparse
+    from datetime import datetime
+    import uuid
 
     parser = argparse.ArgumentParser(description="Run scripting-only test")
     parser.add_argument("--input-file", default="assets/input/20-thousand-leagues-under-the-sea.txt")
@@ -167,13 +169,24 @@ if __name__ == "__main__":
     test_mode = not args.full_mode
     input_stem = Path(args.input_file).stem
     suffix = "_test_page" if test_mode else "_full_script"
-    script_path = f"assets/output/{input_stem}{suffix}.json"
+
+    # Create isolated output directory for standalone run
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_uuid = str(uuid.uuid4())[:8]
+    base_output_dir = Path(f"assets/output/test_run_{timestamp}_{short_uuid}")
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    (base_output_dir / "characters").mkdir(exist_ok=True)
+    (base_output_dir / "objects").mkdir(exist_ok=True)
+    (base_output_dir / "pages").mkdir(exist_ok=True)
+    (base_output_dir / "final_pages").mkdir(exist_ok=True)
+
+    script_path = str(base_output_dir / f"{input_stem}{suffix}.json")
 
     async def run():
         test = TestScriptingOnly()
         await test.test_generate_script(
             args.input_file, args.style, args.tone,
-            test_mode, args.pages, script_path
+            test_mode, args.pages, script_path, base_output_dir
         )
 
     asyncio.run(run())

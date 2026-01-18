@@ -75,12 +75,70 @@ Edit `production_run.py` to configure your input file, style, and tone before ru
 
 ## Architecture
 
-The pipeline uses a 3-agent architecture:
+The pipeline uses a 3-agent architecture to transform text into graphic novels:
 
 ```
-ScriptingAgent → IllustratorAgent → CompositorAgent
-   (script +       (refs + panels)    (compose + export)
-    assets)
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         ILLUSTRATIVE AI PIPELINE                                │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+    ┌──────────────┐
+    │  INPUT FILE  │   Public domain literature (.txt)
+    │   (Upload)   │   e.g., Alice in Wonderland, 20,000 Leagues Under the Sea
+    └──────┬───────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│  SCRIPTING AGENT                                                                 │
+│  ════════════════                                                                │
+│  Uses Gemini 2M context window to analyze full book                              │
+│                                                                                  │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐          │
+│  │  PASS 0-1   │──▶│  PASS 1.5   │──▶│  PASS 2-3   │──▶│  PASS 4-6   │          │
+│  │  Beat       │   │  Adaptation │   │  Director + │   │  Assets +   │          │
+│  │  Analysis   │   │  Filter     │   │  Characters │   │  Script     │          │
+│  └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘          │
+│                                                                                  │
+│  Output: _full_script.json, _assets.json, _beats.json, _character_arcs.json     │
+└──────────────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│  ILLUSTRATOR AGENT                                                               │
+│  ═════════════════                                                               │
+│                                                                                  │
+│  ┌─────────────────────────┐        ┌─────────────────────────────────┐         │
+│  │   REFERENCE SHEETS      │        │      PANEL GENERATION           │         │
+│  │   ─────────────────     │        │      ────────────────           │         │
+│  │   • Character refs      │───────▶│   • Uses refs for consistency   │         │
+│  │   • Object refs         │        │   • 3-tier model fallback       │         │
+│  │   • Location refs       │        │   • Parallel async generation   │         │
+│  └─────────────────────────┘        └─────────────────────────────────┘         │
+│                                                                                  │
+│  Output: assets/output/characters/*.png, assets/output/pages/*.png              │
+└──────────────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│  COMPOSITOR AGENT                                                                │
+│  ════════════════                                                                │
+│                                                                                  │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐      │
+│  │    LAYOUT    │──▶│   COMPOSE    │──▶│    TEXT      │──▶│    EXPORT    │      │
+│  │   ────────   │   │   ───────    │   │   ────       │   │   ──────     │      │
+│  │  Panel grid  │   │  Assemble    │   │  Speech      │   │  • PDF       │      │
+│  │  positions   │   │  panels on   │   │  bubbles +   │   │  • EPUB      │      │
+│  │  and sizes   │   │  page canvas │   │  captions    │   │              │      │
+│  └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘      │
+│                                                                                  │
+│  Output: assets/output/final_pages/*.png                                        │
+└──────────────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────┐
+    │    OUTPUT    │   Complete graphic novel ready for reading
+    │  (PDF/EPUB)  │   with consistent characters and professional layouts
+    └──────────────┘
 ```
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture documentation.

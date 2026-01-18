@@ -56,7 +56,7 @@ def skip_validation(request):
 
 
 @pytest.mark.asyncio
-async def test_smoke(skip_validation=False):
+async def test_smoke(base_output_dir, skip_validation=False):
     """
     Simplified 3-step smoke test with validation:
     1. ScriptingAgent: Script + asset manifest
@@ -70,14 +70,15 @@ async def test_smoke(skip_validation=False):
     - Consistency audit: Cross-panel character consistency
     """
     print("\nStarting Smoke Test (3-Step Pipeline with Validation)...")
+    print(f"Output Dir: {base_output_dir}")
 
     input_file = "assets/input/20-thousand-leagues-under-the-sea.txt"
     style = "Manga/Anime"
     tone = "Philosophical"
     input_stem = Path(input_file).stem
 
-    script_path = f"assets/output/{input_stem}_test_page.json"
-    assets_path = f"assets/output/{input_stem}_assets.json"
+    script_path = str(base_output_dir / f"{input_stem}_test_page.json")
+    assets_path = str(base_output_dir / f"{input_stem}_assets.json")
 
     validation_results = {
         "pre_validation_issues": 0,
@@ -89,7 +90,7 @@ async def test_smoke(skip_validation=False):
 
     # --- STEP 1: SCRIPTING (includes asset manifest) ---
     print("\n--- STEP 1: SCRIPTING + ASSET ANALYSIS ---")
-    scripter = ScriptingAgent(input_file)
+    scripter = ScriptingAgent(input_file, base_output_dir=base_output_dir)
     script = await scripter.generate_script(style=style, test_mode=True)
 
     assert script is not None, "Script generation failed"
@@ -141,7 +142,7 @@ async def test_smoke(skip_validation=False):
     # --- VALIDATION HOOK: Continuity validation ---
     if not skip_validation:
         print("\n--- VALIDATION: Continuity ---")
-        char_dir = Path("assets/output/characters")
+        char_dir = base_output_dir / "characters"
         continuity_result = validate_script_continuity(script_path, str(char_dir))
 
         validation_results["continuity_errors"] = len(continuity_result.get('errors', []))
@@ -152,7 +153,7 @@ async def test_smoke(skip_validation=False):
 
     # --- STEP 2: ILLUSTRATION (reference sheets + panels) ---
     print("\n--- STEP 2: ILLUSTRATION ---")
-    illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone")
+    illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone", base_output_dir=base_output_dir)
 
     # Generate reference sheets for characters/objects
     await illustrator.generate_all_references(style=style)
@@ -161,7 +162,7 @@ async def test_smoke(skip_validation=False):
     await illustrator.run_production()
 
     # Verify panels generated
-    pages_dir = Path("assets/output/pages")
+    pages_dir = base_output_dir / "pages"
     panel_count = 0
     if pages_dir.exists():
         panel_count = len(list(pages_dir.rglob("*.png")))
@@ -170,15 +171,15 @@ async def test_smoke(skip_validation=False):
     # --- VALIDATION HOOK: Consistency audit ---
     if not skip_validation and panel_count > 0:
         print("\n--- VALIDATION: Consistency Audit ---")
-        await _run_consistency_audit(script, validation_results)
+        await _run_consistency_audit(script, validation_results, base_output_dir)
 
     # --- STEP 3: COMPOSITION + EXPORT ---
     print("\n--- STEP 3: COMPOSITION + EXPORT ---")
-    compositor = CompositorAgent(script_path)
+    compositor = CompositorAgent(script_path, base_output_dir=base_output_dir)
     compositor.run()
 
     # Verify final output
-    final_pages_dir = Path("assets/output/final_pages")
+    final_pages_dir = base_output_dir / "final_pages"
     final_count = 0
     if final_pages_dir.exists():
         final_count = len(list(final_pages_dir.glob("*.png")))
@@ -206,15 +207,15 @@ async def test_smoke(skip_validation=False):
         assert validation_results["continuity_errors"] == 0, \
             f"Continuity errors found: {validation_results['continuity_errors']}"
 
-    print("\nSmoke Test Complete! Check assets/output/final_pages/")
+    print(f"\nSmoke Test Complete! Check {final_pages_dir}/")
 
 
-async def _run_consistency_audit(script, validation_results):
+async def _run_consistency_audit(script, validation_results, base_output_dir):
     """Run consistency audit on generated panels."""
     from PIL import Image
 
     auditor = ConsistencyAuditor()
-    pages_dir = Path("assets/output/pages")
+    pages_dir = base_output_dir / "pages"
 
     if not pages_dir.exists():
         print("  Skipping - no pages directory")
@@ -265,21 +266,22 @@ async def _run_consistency_audit(script, validation_results):
 
 
 @pytest.mark.asyncio
-async def test_smoke_script_only():
+async def test_smoke_script_only(base_output_dir):
     """
     Smoke test for script generation only (no images).
     Faster test that validates the scripting pipeline.
     """
     print("\nStarting Script-Only Smoke Test...")
+    print(f"Output Dir: {base_output_dir}")
 
     input_file = "assets/input/20-thousand-leagues-under-the-sea.txt"
     style = "Manga/Anime"
     input_stem = Path(input_file).stem
-    script_path = f"assets/output/{input_stem}_test_page.json"
-    assets_path = f"assets/output/{input_stem}_assets.json"
+    script_path = str(base_output_dir / f"{input_stem}_test_page.json")
+    assets_path = str(base_output_dir / f"{input_stem}_assets.json")
 
-    # Generate script
-    scripter = ScriptingAgent(input_file)
+    # Generate script with isolated output directory
+    scripter = ScriptingAgent(input_file, base_output_dir=base_output_dir)
     script = await scripter.generate_script(style=style, test_mode=True)
 
     assert script is not None, "Script generation failed"
@@ -310,4 +312,17 @@ async def test_smoke_script_only():
 
 # Allow running as standalone script
 if __name__ == "__main__":
-    asyncio.run(test_smoke())
+    from datetime import datetime
+    import uuid
+
+    # Create isolated output directory for standalone run
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_uuid = str(uuid.uuid4())[:8]
+    standalone_output_dir = Path(f"assets/output/test_run_{timestamp}_{short_uuid}")
+    standalone_output_dir.mkdir(parents=True, exist_ok=True)
+    (standalone_output_dir / "characters").mkdir(exist_ok=True)
+    (standalone_output_dir / "objects").mkdir(exist_ok=True)
+    (standalone_output_dir / "pages").mkdir(exist_ok=True)
+    (standalone_output_dir / "final_pages").mkdir(exist_ok=True)
+
+    asyncio.run(test_smoke(standalone_output_dir))

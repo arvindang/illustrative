@@ -122,10 +122,10 @@ class PipelineConfig:
 
     # Image Models (priority order for fallback)
     # Gemini 3 Pro Image: 14 input images max, 32K output tokens, highest quality
-    # Gemini 2.5 Flash Image: 3 input images max, GA fallback
+    # For Gemini 3 only mode: all models set to gemini-3-pro-image-preview
     image_model_primary: str = "gemini-3-pro-image-preview"   # Best quality, 14 ref images
-    image_model_fallback: str = "gemini-2.5-flash-image"      # GA fallback, 3 ref images max
-    image_model_last_resort: str = "gemini-2.5-flash-image"   # Same as fallback
+    image_model_fallback: str = "gemini-3-pro-image-preview"  # Same as primary (Gemini 3 only)
+    image_model_last_resort: str = "gemini-3-pro-image-preview"  # Same as primary (Gemini 3 only)
 
     # Character Design Models
     character_model_attributes: str = "gemini-3-flash-preview"  # Fast text/attributes

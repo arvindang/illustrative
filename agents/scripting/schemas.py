@@ -140,9 +140,9 @@ BLUEPRINT_PAGE_SCHEMA = {
             "key_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
             "visual_notes": {"type": "STRING"},
             "scene_type": {"type": "STRING"},
-            # Spread and pacing fields
-            "is_spread": {"type": "BOOLEAN"},
-            "is_cliffhanger": {"type": "BOOLEAN"},
+            # Full-bleed and pacing fields (for digital reading - one page at a time)
+            "is_spread": {"type": "BOOLEAN"},  # Full-bleed single page (epic moments)
+            "is_cliffhanger": {"type": "BOOLEAN"},  # Page ends with hook/reveal
             "page_turn_note": {"type": "STRING"},
             "suggested_panel_count": {"type": "INTEGER"},
             "recommended_splash": {"type": "BOOLEAN"}
@@ -330,6 +330,12 @@ PAGE_SCRIPT_SCHEMA = {
     "type": "OBJECT",
     "properties": {
         "page_number": {"type": "INTEGER"},
+        # Layout metadata (preserved from blueprint for downstream agents)
+        "recommended_splash": {"type": "BOOLEAN"},
+        "is_full_bleed": {"type": "BOOLEAN"},  # Full-bleed single page (for digital reading)
+        "is_cliffhanger": {"type": "BOOLEAN"},
+        "suggested_panel_count": {"type": "INTEGER"},
+        "scene_type": {"type": "STRING"},
         "panels": {
             "type": "ARRAY",
             "items": {

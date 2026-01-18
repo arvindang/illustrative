@@ -111,22 +111,25 @@ async def _generate_blueprint_chunk(
     6. 'visual_notes': Specific setting or lighting notes. Include era-appropriate details.
     7. 'scene_type': One of "action", "dialogue", "establishing", "montage", "flashback", "transition", "underwater", "formal"
 
-    NEW - SPREAD & PACING FIELDS:
-    8. 'is_spread': Boolean - true if this page should be a TWO-PAGE SPREAD (panoramic reveal, epic battle).
-       Use sparingly! Only 1-3 spreads per 50 pages. Spreads MUST be on EVEN page numbers (left page).
-    9. 'is_cliffhanger': Boolean - true if this page ends with a hook/reveal that makes readers turn the page.
-       IMPORTANT: Cliffhangers should land on ODD pages (right side) so the reveal is on the next turn.
+    NEW - FULL-BLEED & PACING FIELDS (for DIGITAL graphic novel - readers see ONE page at a time):
+    8. 'is_spread': Boolean - true if this page should be a FULL-BLEED single page (one dramatic image filling entire page).
+       Use sparingly! Only 1-3 full-bleeds per 50 pages. Best for: epic reveals, panoramic vistas, emotional climaxes.
+    9. 'is_cliffhanger': Boolean - true if this page ends with a hook/reveal that makes readers swipe to next page.
+       Best cliffhangers: shocking reveals, danger moments, emotional decisions, mysterious arrivals.
     10. 'page_turn_note': Brief guidance on reader experience at page turn (e.g., "Reveal the monster on next page",
         "Pause before the decision", "Immediate action continues").
     11. 'suggested_panel_count': Integer 3-6. Fewer panels = more dramatic weight per image.
         Use 2-3 for climactic moments, 5-6 for rapid action/transitions.
+        Set to 1 for full-bleed pages (is_spread=true).
     12. 'recommended_splash': Boolean - true if one panel should dominate (60%+ of page).
+        Different from full-bleed: splash has one LARGE panel with smaller supporting panels.
 
-    SPREAD RULES:
-    - Spreads work best for: vast landscapes, epic reveals, battle panoramas, emotional climaxes
-    - A spread uses pages N (even) and N+1 (odd) as ONE image
-    - Mark ONLY the first page of the spread as is_spread=true
-    - The page AFTER a spread should be a quieter moment (pacing reset)
+    FULL-BLEED RULES (is_spread=true):
+    - Creates a SINGLE image covering the entire page (no panel divisions)
+    - Best for: vast landscapes, epic reveals, battle panoramas, emotional climaxes, major character introductions
+    - Use sparingly for maximum impact (1-3 per 50 pages)
+    - The page AFTER a full-bleed should usually be a quieter moment (pacing reset)
+    - When is_spread=true, set suggested_panel_count=1
 
     CLIFFHANGER RULES:
     - Best cliffhangers: shocking reveals, danger moments, emotional decisions, mysterious arrivals

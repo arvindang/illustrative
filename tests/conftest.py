@@ -13,10 +13,17 @@ Usage:
 
 Requirements:
     pip install pytest pytest-asyncio
+
+Output Isolation:
+    Each test session creates a unique output directory under assets/output/
+    with format: test_run_YYYYMMDD_HHMMSS_{short_uuid}/
+    This prevents stale file references and allows easy comparison between runs.
 """
 import pytest
 import pytest_asyncio
 from pathlib import Path
+from datetime import datetime
+import uuid
 
 # Configure pytest-asyncio to use auto mode
 pytest_plugins = ('pytest_asyncio',)
@@ -108,16 +115,43 @@ def test_mode(request):
     return request.config.getoption("--test-mode")
 
 
+@pytest.fixture(scope="session")
+def base_output_dir():
+    """
+    Create a unique output directory for this test session.
+
+    Format: assets/output/test_run_YYYYMMDD_HHMMSS_{short_uuid}/
+
+    This ensures:
+    - Each test run is isolated from previous runs
+    - No stale file references
+    - Easy comparison between different test runs
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_uuid = str(uuid.uuid4())[:8]
+    output_dir = Path(f"assets/output/test_run_{timestamp}_{short_uuid}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create subdirectories that agents expect
+    (output_dir / "characters").mkdir(exist_ok=True)
+    (output_dir / "objects").mkdir(exist_ok=True)
+    (output_dir / "pages").mkdir(exist_ok=True)
+    (output_dir / "final_pages").mkdir(exist_ok=True)
+
+    print(f"\n📁 Test output directory: {output_dir}")
+    return output_dir
+
+
 @pytest.fixture
-def script_path(input_file, test_mode):
+def script_path(input_file, test_mode, base_output_dir):
     """Derived script output path based on input file and mode."""
     input_stem = Path(input_file).stem
     suffix = "_test_page" if test_mode else "_full_script"
-    return f"assets/output/{input_stem}{suffix}.json"
+    return str(base_output_dir / f"{input_stem}{suffix}.json")
 
 
 @pytest.fixture
-def assets_path(input_file):
+def assets_path(input_file, base_output_dir):
     """Derived assets manifest path based on input file."""
     input_stem = Path(input_file).stem
-    return f"assets/output/{input_stem}_assets.json"
+    return str(base_output_dir / f"{input_stem}_assets.json")

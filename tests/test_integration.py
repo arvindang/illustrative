@@ -126,7 +126,7 @@ class TestIntegration:
 
     @pytest.mark.asyncio
     async def test_10_page_integration(
-        self, input_file, style, tone, target_pages, script_path, assets_path, script_only
+        self, input_file, style, tone, target_pages, script_path, assets_path, base_output_dir, script_only
     ):
         """
         Full integration test with validation at each step.
@@ -153,6 +153,7 @@ class TestIntegration:
         print(f"Style:       {style}")
         print(f"Tone:        {tone}")
         print(f"Pages:       {target_pages}")
+        print(f"Output Dir:  {base_output_dir}")
         print(f"Script Only: {script_only}")
         print(f"{'='*60}\n")
 
@@ -160,7 +161,7 @@ class TestIntegration:
         # STEP 1: SCRIPT GENERATION
         # ===================================================================
         print("\n--- STEP 1: SCRIPT GENERATION ---")
-        scripter = ScriptingAgent(input_file)
+        scripter = ScriptingAgent(input_file, base_output_dir=base_output_dir)
         script = await scripter.generate_script(
             style=f"{style}, {tone}",
             test_mode=False,  # Full mode for integration
@@ -194,14 +195,14 @@ class TestIntegration:
 
         # Load character arcs if available
         input_stem = Path(input_file).stem
-        arcs_file = Path(f"assets/output/{input_stem}_character_arcs.json")
+        arcs_file = base_output_dir / f"{input_stem}_character_arcs.json"
         if arcs_file.exists():
             with open(arcs_file, 'r') as f:
                 character_arcs = json.load(f)
 
         # Determine era from global context
         era = ""
-        context_file = Path(f"assets/output/{input_stem}_global_context.json")
+        context_file = base_output_dir / f"{input_stem}_global_context.json"
         if context_file.exists():
             with open(context_file, 'r') as f:
                 context = json.load(f)
@@ -270,7 +271,7 @@ class TestIntegration:
         # STEP 5: CONTINUITY VALIDATION
         # ===================================================================
         print("\n--- STEP 5: CONTINUITY VALIDATION ---")
-        char_dir = Path("assets/output/characters")
+        char_dir = base_output_dir / "characters"
         continuity_result = validate_script_continuity(script_path, str(char_dir))
 
         metrics.continuity_errors = len(continuity_result.get('errors', []))
@@ -315,32 +316,33 @@ class TestIntegration:
             print("\n--- STEP 7a: REFERENCE GENERATION ---")
             ref_agent = ReferenceAgent(
                 assets_path=str(assets_file),
-                style_prompt=f"{style} style, {tone} tone"
+                style_prompt=f"{style} style, {tone} tone",
+                base_output_dir=base_output_dir
             )
             await ref_agent.run(style=style)
 
             # Panel generation
             print("\n--- STEP 7b: PANEL GENERATION ---")
-            panel_agent = PanelAgent(script_path, f"{style} style, {tone} tone")
+            panel_agent = PanelAgent(script_path, f"{style} style, {tone} tone", base_output_dir=base_output_dir)
             await panel_agent.run_production()
 
             # Verify panels exist
-            pages_dir = Path("assets/output/pages")
+            pages_dir = base_output_dir / "pages"
             if pages_dir.exists():
                 panel_images = list(pages_dir.rglob("*.png"))
                 print(f"Panel images generated: {len(panel_images)}")
 
             # Consistency audit on first page panels
             print("\n--- STEP 7c: CONSISTENCY AUDIT ---")
-            await self._audit_page_consistency(script, metrics)
+            await self._audit_page_consistency(script, metrics, base_output_dir)
 
             # Composition
             print("\n--- STEP 7d: COMPOSITION + EXPORT ---")
-            compositor = CompositorAgent(script_path)
+            compositor = CompositorAgent(script_path, base_output_dir=base_output_dir)
             compositor.run()
 
             # Verify final pages
-            final_pages_dir = Path("assets/output/final_pages")
+            final_pages_dir = base_output_dir / "final_pages"
             if final_pages_dir.exists():
                 final_pages = list(final_pages_dir.glob("*.png"))
                 print(f"Final pages composed: {len(final_pages)}")
@@ -351,12 +353,12 @@ class TestIntegration:
         # ===================================================================
         print(metrics.report())
 
-    async def _audit_page_consistency(self, script: List[Dict], metrics: IntegrationTestMetrics):
+    async def _audit_page_consistency(self, script: List[Dict], metrics: IntegrationTestMetrics, base_output_dir: Path):
         """Audit character consistency across panels on first few pages."""
         from PIL import Image
 
         auditor = ConsistencyAuditor()
-        pages_dir = Path("assets/output/pages")
+        pages_dir = base_output_dir / "pages"
 
         if not pages_dir.exists():
             print("  Skipping consistency audit - no pages directory")
@@ -412,7 +414,7 @@ class TestDialogueQuality:
     """Focused tests for dialogue quality across pages."""
 
     @pytest.mark.asyncio
-    async def test_dialogue_continuity(self, input_file, style, tone, script_path):
+    async def test_dialogue_continuity(self, input_file, style, tone, script_path, base_output_dir):
         """
         Test that dialogue flows naturally between pages.
 
@@ -472,7 +474,7 @@ class TestVisualContinuity:
     """Focused tests for visual continuity across pages."""
 
     @pytest.mark.asyncio
-    async def test_character_appearance_tracking(self, script_path):
+    async def test_character_appearance_tracking(self, script_path, base_output_dir):
         """
         Test that character appearances are tracked consistently.
 
@@ -528,6 +530,8 @@ class TestVisualContinuity:
 # Allow running as standalone script
 if __name__ == "__main__":
     import argparse
+    from datetime import datetime
+    import uuid
 
     parser = argparse.ArgumentParser(description="Run 10-page integration test")
     parser.add_argument("--input-file", default="assets/input/20-thousand-leagues-under-the-sea.txt")
@@ -538,8 +542,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     input_stem = Path(args.input_file).stem
-    script_path = f"assets/output/{input_stem}_full_script.json"
-    assets_path = f"assets/output/{input_stem}_assets.json"
+
+    # Create isolated output directory for standalone run
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_uuid = str(uuid.uuid4())[:8]
+    base_output_dir = Path(f"assets/output/test_run_{timestamp}_{short_uuid}")
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    (base_output_dir / "characters").mkdir(exist_ok=True)
+    (base_output_dir / "objects").mkdir(exist_ok=True)
+    (base_output_dir / "pages").mkdir(exist_ok=True)
+    (base_output_dir / "final_pages").mkdir(exist_ok=True)
+
+    script_path = str(base_output_dir / f"{input_stem}_full_script.json")
+    assets_path = str(base_output_dir / f"{input_stem}_assets.json")
 
     async def run():
         test = TestIntegration()
@@ -550,6 +565,7 @@ if __name__ == "__main__":
             target_pages=args.pages,
             script_path=script_path,
             assets_path=assets_path,
+            base_output_dir=base_output_dir,
             script_only=args.script_only
         )
 

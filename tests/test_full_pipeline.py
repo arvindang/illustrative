@@ -143,7 +143,7 @@ class TestFullPipeline:
 
     @pytest.mark.asyncio
     async def test_full_pipeline(
-        self, input_file, style, tone, test_mode, target_pages, script_path, skip_validation
+        self, input_file, style, tone, test_mode, target_pages, script_path, assets_path, base_output_dir, skip_validation
     ):
         """
         Test complete pipeline from text to final composed pages.
@@ -166,17 +166,17 @@ class TestFullPipeline:
         print(f"Tone:            {tone}")
         print(f"Test Mode:       {test_mode}")
         print(f"Pages:           {target_pages}")
+        print(f"Output Dir:      {base_output_dir}")
         print(f"Skip Validation: {skip_validation}")
         print(f"{'='*60}\n")
 
         input_stem = Path(input_file).stem
-        assets_path = f"assets/output/{input_stem}_assets.json"
 
         # ===================================================================
         # STEP 1: SCRIPTING
         # ===================================================================
         print("\n--- STEP 1: SCRIPTING + ASSET ANALYSIS ---")
-        scripter = ScriptingAgent(input_file)
+        scripter = ScriptingAgent(input_file, base_output_dir=base_output_dir)
         script = await scripter.generate_script(
             style=f"{style}, {tone}",
             test_mode=test_mode,
@@ -210,7 +210,7 @@ class TestFullPipeline:
                     assets = json.load(f)
 
             # Determine era
-            era = self._detect_era(input_stem)
+            era = self._detect_era(input_stem, base_output_dir)
 
             # 2a. Pre-validation
             print("\n  [2a] Pre-validation...")
@@ -253,7 +253,7 @@ class TestFullPipeline:
 
             # 2c. Continuity validation
             print("\n  [2c] Continuity validation...")
-            char_dir = Path("assets/output/characters")
+            char_dir = base_output_dir / "characters"
             continuity_result = validate_script_continuity(script_path, str(char_dir))
 
             metrics.continuity_errors = len(continuity_result.get('errors', []))
@@ -266,14 +266,14 @@ class TestFullPipeline:
         # STEP 3: ILLUSTRATION
         # ===================================================================
         print("\n--- STEP 3: ILLUSTRATION ---")
-        illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone")
+        illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone", base_output_dir=base_output_dir)
 
         # Generate reference sheets
         print("\n  [3a] Generating reference sheets...")
         await illustrator.generate_all_references(style=style)
 
         # Count generated references
-        char_dir = Path("assets/output/characters")
+        char_dir = base_output_dir / "characters"
         if char_dir.exists():
             for folder in char_dir.iterdir():
                 if folder.is_dir() and list(folder.glob("*.png")):
@@ -286,7 +286,7 @@ class TestFullPipeline:
         await illustrator.run_production()
 
         # Verify panel images
-        pages_dir = Path("assets/output/pages")
+        pages_dir = base_output_dir / "pages"
         panel_images_count = 0
         if pages_dir.exists():
             panel_images_count = len(list(pages_dir.rglob("*.png")))
@@ -297,18 +297,18 @@ class TestFullPipeline:
         # ===================================================================
         if not skip_validation and panel_images_count > 0:
             print("\n--- STEP 4: CONSISTENCY AUDIT ---")
-            metrics.consistency_issues = await self._run_consistency_audit(script)
+            metrics.consistency_issues = await self._run_consistency_audit(script, base_output_dir)
             print(f"       Consistency issues: {metrics.consistency_issues}")
 
         # ===================================================================
         # STEP 5: COMPOSITION
         # ===================================================================
         print("\n--- STEP 5: COMPOSITION + EXPORT ---")
-        compositor = CompositorAgent(script_path)
+        compositor = CompositorAgent(script_path, base_output_dir=base_output_dir)
         compositor.run()
 
         # Verify final pages
-        final_pages_dir = Path("assets/output/final_pages")
+        final_pages_dir = base_output_dir / "final_pages"
         if final_pages_dir.exists():
             final_pages = list(final_pages_dir.glob("*.png"))
             metrics.final_pages_composed = len(final_pages)
@@ -323,7 +323,7 @@ class TestFullPipeline:
             print("\n--- STEP 6: COMPOSITION QUALITY CHECK ---")
             # Basic check: final pages should be larger than panel images
             # (composition adds borders, bubbles, etc.)
-            final_page = final_pages_dir / "page_1.png"
+            final_page = base_output_dir / "final_pages" / "page_1.png"
             if final_page.exists():
                 from PIL import Image
                 with Image.open(final_page) as img:
@@ -351,12 +351,12 @@ class TestFullPipeline:
 
         print(f"\nPipeline complete! Check: assets/output/final_pages/")
 
-    async def _run_consistency_audit(self, script: List[Dict]) -> int:
+    async def _run_consistency_audit(self, script: List[Dict], base_output_dir: Path) -> int:
         """Run consistency audit on generated panels, return issue count."""
         from PIL import Image
 
         auditor = ConsistencyAuditor()
-        pages_dir = Path("assets/output/pages")
+        pages_dir = base_output_dir / "pages"
         total_issues = 0
 
         if not pages_dir.exists():
@@ -404,10 +404,10 @@ class TestFullPipeline:
 
         return total_issues
 
-    def _detect_era(self, input_stem: str) -> str:
+    def _detect_era(self, input_stem: str, base_output_dir: Path) -> str:
         """Detect era from input file name or global context."""
         # Check for global context file
-        context_file = Path(f"assets/output/{input_stem}_global_context.json")
+        context_file = base_output_dir / f"{input_stem}_global_context.json"
         if context_file.exists():
             with open(context_file, 'r') as f:
                 context = json.load(f)
@@ -421,7 +421,7 @@ class TestFullPipeline:
         return ""
 
     @pytest.mark.asyncio
-    async def test_resume_from_script(self, script_path, style, tone, skip_validation):
+    async def test_resume_from_script(self, script_path, style, tone, base_output_dir, skip_validation):
         """
         Test resuming pipeline from existing script JSON.
 
@@ -435,8 +435,9 @@ class TestFullPipeline:
         print(f"\n{'='*60}")
         print("RESUME FROM SCRIPT TEST")
         print(f"{'='*60}")
-        print(f"Script:  {script_path}")
-        print(f"Style:   {style}")
+        print(f"Script:     {script_path}")
+        print(f"Output Dir: {base_output_dir}")
+        print(f"Style:      {style}")
         print(f"{'='*60}\n")
 
         # Load script for validation
@@ -447,7 +448,7 @@ class TestFullPipeline:
         if not skip_validation:
             print("\n--- VALIDATION: Post-validation ---")
             input_stem = Path(script_path).stem.replace("_test_page", "").replace("_full_script", "")
-            era = self._detect_era(input_stem)
+            era = self._detect_era(input_stem, base_output_dir)
             post_validator = ScriptValidator(era=era)
             fixed_script, report = post_validator.validate_and_fix(script)
             print(f"       Auto-fixes: {report.auto_fixed}")
@@ -459,18 +460,18 @@ class TestFullPipeline:
 
         # --- STEP 2: ILLUSTRATION ---
         print("\n--- STEP 2: ILLUSTRATION (Resume) ---")
-        illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone")
+        illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone", base_output_dir=base_output_dir)
         await illustrator.generate_all_references(style=style)
         await illustrator.run_production()
 
         # --- STEP 3: COMPOSITION ---
         print("\n--- STEP 3: COMPOSITION (Resume) ---")
-        compositor = CompositorAgent(script_path)
+        compositor = CompositorAgent(script_path, base_output_dir=base_output_dir)
         compositor.run()
 
-        final_pages_dir = Path("assets/output/final_pages")
+        final_pages_dir = base_output_dir / "final_pages"
         final_pages = list(final_pages_dir.glob("*.png")) if final_pages_dir.exists() else []
-        print(f"\nResume complete! {len(final_pages)} pages in assets/output/final_pages/")
+        print(f"\nResume complete! {len(final_pages)} pages in {final_pages_dir}/")
 
         assert len(final_pages) > 0, "No final pages generated"
 
@@ -479,7 +480,7 @@ class TestPipelineValidationOnly:
     """Tests that run validation without generation (uses existing outputs)."""
 
     @pytest.mark.asyncio
-    async def test_validate_existing_script(self, script_path):
+    async def test_validate_existing_script(self, script_path, base_output_dir):
         """Validate an existing script without regenerating."""
         script_file = Path(script_path)
         if not script_file.exists():
@@ -487,7 +488,8 @@ class TestPipelineValidationOnly:
 
         print(f"\n{'='*60}")
         print("VALIDATE EXISTING SCRIPT")
-        print(f"{'='*60}\n")
+        print(f"{'='*60}")
+        print(f"Output Dir: {base_output_dir}\n")
 
         with open(script_file, 'r') as f:
             script = json.load(f)
@@ -505,9 +507,9 @@ class TestPipelineValidationOnly:
         assert report.manual_review <= 2, f"Script needs manual review"
 
     @pytest.mark.asyncio
-    async def test_validate_existing_references(self):
+    async def test_validate_existing_references(self, base_output_dir):
         """Validate existing reference sheets for consistency."""
-        char_dir = Path("assets/output/characters")
+        char_dir = base_output_dir / "characters"
         if not char_dir.exists():
             pytest.skip("No character directory found")
 
@@ -547,6 +549,8 @@ class TestPipelineValidationOnly:
 # Allow running as standalone script
 if __name__ == "__main__":
     import argparse
+    from datetime import datetime
+    import uuid
 
     parser = argparse.ArgumentParser(description="Run full pipeline test")
     parser.add_argument("--input-file", default="assets/input/20-thousand-leagues-under-the-sea.txt")
@@ -561,16 +565,28 @@ if __name__ == "__main__":
     test_mode = not args.full_mode
     input_stem = Path(args.input_file).stem
     suffix = "_test_page" if test_mode else "_full_script"
-    script_path = f"assets/output/{input_stem}{suffix}.json"
+
+    # Create isolated output directory for standalone run
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_uuid = str(uuid.uuid4())[:8]
+    base_output_dir = Path(f"assets/output/test_run_{timestamp}_{short_uuid}")
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    (base_output_dir / "characters").mkdir(exist_ok=True)
+    (base_output_dir / "objects").mkdir(exist_ok=True)
+    (base_output_dir / "pages").mkdir(exist_ok=True)
+    (base_output_dir / "final_pages").mkdir(exist_ok=True)
+
+    script_path = str(base_output_dir / f"{input_stem}{suffix}.json")
+    assets_path = str(base_output_dir / f"{input_stem}_assets.json")
 
     async def run():
         test = TestFullPipeline()
         if args.resume:
-            await test.test_resume_from_script(script_path, args.style, args.tone, args.skip_validation)
+            await test.test_resume_from_script(script_path, args.style, args.tone, base_output_dir, args.skip_validation)
         else:
             await test.test_full_pipeline(
                 args.input_file, args.style, args.tone,
-                test_mode, args.pages, script_path, args.skip_validation
+                test_mode, args.pages, script_path, assets_path, base_output_dir, args.skip_validation
             )
 
     asyncio.run(run())
