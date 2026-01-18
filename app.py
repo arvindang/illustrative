@@ -319,9 +319,7 @@ def run_async(coro):
 async def execute_pipeline(status, input_path: str, style: str, target_pages: int, test_mode: bool, novel_id: str = None, context_constraints: str = ""):
     """Execute the full pipeline with progress tracking."""
     # Lazy import heavy modules only when actually generating
-    from scripting_agent import ScriptingAgent
-    from illustrator_agent import IllustratorAgent
-    from compositor_agent import CompositorAgent
+    from agents import ScriptingAgent, IllustratorAgent, CompositorAgent
 
     input_stem = Path(input_path).stem
 
@@ -659,8 +657,7 @@ async def resume_pipeline(status, novel: dict, api_key: str):
     Resume a partially completed pipeline from the last checkpoint.
     """
     # Lazy import heavy modules only when actually generating
-    from illustrator_agent import IllustratorAgent
-    from compositor_agent import CompositorAgent
+    from agents import IllustratorAgent, CompositorAgent
 
     novel_id = novel['id']
     user_id = st.session_state.user_id

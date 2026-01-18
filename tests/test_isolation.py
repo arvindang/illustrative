@@ -1,8 +1,11 @@
+import sys
 import unittest
 from pathlib import Path
-from scripting_agent import ScriptingAgent
-from illustrator_agent import IllustratorAgent
-from compositor_agent import CompositorAgent
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from agents import ScriptingAgent, IllustratorAgent, CompositorAgent
 
 class TestAgentIsolation(unittest.TestCase):
     def test_scripting_agent_paths(self):

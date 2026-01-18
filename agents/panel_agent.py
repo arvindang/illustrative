@@ -14,7 +14,8 @@ from utils import (
     get_client
 )
 from config import config
-from validators import PanelValidator, ConsistencyAuditor, ContinuityValidator
+from validators import PanelValidator, ConsistencyAuditor, ContinuityValidator, ImageCompositionAnalyzer
+from agents.reference_agent import ReferenceAgent
 
 # Image generation rate limiter (lazy-initialized)
 # Uses effective rate limits based on Vertex AI vs AI Studio
@@ -28,53 +29,58 @@ def get_image_limiter() -> RateLimiter:
         _image_limiter = RateLimiter(rpm_limit=effective_limits['image_rpm'])
     return _image_limiter
 
-class IllustratorAgent:
-    def __init__(self, script_path: str, style_prompt: str, base_output_dir: Path = None):
+class PanelAgent:
+    """
+    Panel generation agent responsible for creating individual comic panels.
+
+    This agent handles:
+    - Panel image generation with character/object references
+    - Three-tier model fallback for reliability
+    - Post-generation validation
+    - Composition analysis for text overlay placement
+    - Visual continuity between sequential panels
+
+    Renamed from IllustratorAgent to better reflect its focused responsibility
+    (panel generation), as reference generation is now handled by ReferenceAgent.
+    """
+
+    def __init__(self, script_path: str, style_prompt: str, base_output_dir: Path = None, reference_agent: ReferenceAgent = None):
         self.script_path = Path(script_path)
         self.style_prompt = style_prompt
-        
+
         if base_output_dir:
             self.base_dir = Path(base_output_dir)
-            self.char_base_dir = self.base_dir / "characters"
-            self.obj_base_dir = self.base_dir / "objects"
             self.output_base_dir = self.base_dir / "pages"
         else:
-            self.char_base_dir = Path("assets/output/characters")
-            self.obj_base_dir = config.objects_dir
+            self.base_dir = Path("assets/output")
             self.output_base_dir = Path("assets/output/pages")
-            
-        self.char_base_dir.mkdir(parents=True, exist_ok=True)
-        self.obj_base_dir.mkdir(parents=True, exist_ok=True)
+
         self.output_base_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize Manifest
         manifest_path = self.output_base_dir.parent / "production_manifest.json"
         self.manifest = ProductionManifest(manifest_path)
 
-        # In-memory cache for lazy-loaded PIL reference images
-        self._character_cache = {}
-        self._metadata_cache = {}
-        self._object_cache = {}
-        self._object_metadata_cache = {}
+        # Initialize or use provided ReferenceAgent for reference management
+        if reference_agent:
+            self.reference_agent = reference_agent
+        else:
+            # Build assets path from script path
+            stem = self.script_path.stem.replace('_full_script', '').replace('_test_page', '')
+            assets_path = self.script_path.parent / f"{stem}_assets.json"
+            self.reference_agent = ReferenceAgent(
+                assets_path=str(assets_path) if assets_path.exists() else None,
+                base_output_dir=self.base_dir,
+                style_prompt=style_prompt
+            )
 
-        # Pre-load list of known objects for scanning
-        self.known_objects = []
-        if self.obj_base_dir.exists():
-            self.known_objects = [d.name for d in self.obj_base_dir.iterdir() if d.is_dir()]
-
-        # Build robust character lookup map
-        self.character_map = {}
-        self._build_character_map()
+        # Expose reference agent's directories for backward compatibility
+        self.char_base_dir = self.reference_agent.char_base_dir
+        self.obj_base_dir = self.reference_agent.obj_base_dir
+        self.known_objects = self.reference_agent.known_objects
+        self.character_map = self.reference_agent.character_map
 
         self.current_model = config.image_model_primary
-
-        # Rate limiter for reference image generation (uses effective limits)
-        effective_limits = config.get_effective_rate_limits()
-        self.ref_limiter = RateLimiter(rpm_limit=effective_limits['character_rpm'])
-
-        # Multi-pass reference generation settings
-        self.ref_candidates = 3  # Number of candidates to generate
-        self.enable_multi_pass_refs = True  # Toggle for multi-pass generation
 
         # Validation settings
         self.enable_panel_validation = True  # Validate each panel after generation
@@ -85,6 +91,10 @@ class IllustratorAgent:
         # Initialize validators
         self.panel_validator = PanelValidator()
         self.consistency_auditor = ConsistencyAuditor()
+
+        # Initialize composition analyzer for image-aware bubble placement
+        self.composition_analyzer = ImageCompositionAnalyzer(output_base_dir=self.output_base_dir)
+        self.enable_composition_analysis = config.enable_image_composition_analysis
 
         # Load character arcs data if available (from enrichment pipeline)
         self.character_arcs = {}
@@ -176,483 +186,30 @@ class IllustratorAgent:
 
         return "\n".join(context_lines) if context_lines else ""
 
-    async def _select_best_reference(self, candidates: list, char_data: dict) -> int:
-        """
-        Uses an LLM judge to select the best reference sheet from multiple candidates.
+    # Reference methods delegated to ReferenceAgent for modularity
 
-        Args:
-            candidates: List of PIL Images (reference sheet candidates)
-            char_data: Character data dict with name, description, distinctive_items, etc.
-
-        Returns:
-            int: Index of the best candidate (0-indexed)
-        """
-        if len(candidates) <= 1:
-            return 0
-
-        name = char_data.get('name', 'Unknown')
-        description = char_data.get('description', '')
-        distinctive_items = char_data.get('distinctive_items', [])
-        age_range = char_data.get('age_range', '')
-        occupation = char_data.get('occupation', '')
-
-        items_str = ", ".join(distinctive_items) if distinctive_items else "none specified"
-
-        judge_prompt = f"""
-You are a quality assurance expert for character reference sheets in graphic novels.
-
-TASK: Select the BEST reference sheet from the candidates shown below.
-
-CHARACTER REQUIREMENTS:
-- Name: {name}
-- Description: {description}
-- Age Range: {age_range}
-- Occupation: {occupation}
-- Distinctive Items (MUST be present): {items_str}
-
-EVALUATION CRITERIA (in order of importance):
-1. CONSISTENCY: Are all views (front, side, 3/4) showing the SAME character? Face, clothing, and items must match across all angles.
-2. DISTINCTIVE ITEMS: Are ALL distinctive items clearly visible and accurate?
-3. DESCRIPTION MATCH: Does the character match the physical description (facial features, clothing, age)?
-4. QUALITY: Is the artwork clear, detailed, and usable as a reference?
-5. STYLE CONSISTENCY: Is the art style consistent across all views?
-
-Analyze each candidate and respond with ONLY a JSON object:
-{{"best_index": <0-based index of best candidate>, "reasoning": "<brief explanation>"}}
-"""
-
-        # Build input with all candidate images
-        input_contents = [judge_prompt]
-        for i, img in enumerate(candidates):
-            input_contents.append(f"\n--- CANDIDATE {i} ---")
-            input_contents.append(img)
-
-        try:
-            response = await get_client().aio.models.generate_content(
-                model=config.scripting_model_page_script,  # Use text model for judging
-                contents=input_contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema={
-                        "type": "OBJECT",
-                        "properties": {
-                            "best_index": {"type": "INTEGER"},
-                            "reasoning": {"type": "STRING"}
-                        },
-                        "required": ["best_index"]
-                    }
-                )
-            )
-
-            result = response.parsed
-            if result and 'best_index' in result:
-                best_idx = result['best_index']
-                reasoning = result.get('reasoning', 'No reasoning provided')
-                print(f"   🏆 LLM Judge selected candidate {best_idx}: {reasoning[:80]}...")
-                return max(0, min(best_idx, len(candidates) - 1))  # Clamp to valid range
-
-        except Exception as e:
-            print(f"   ⚠️ LLM Judge failed: {e}. Defaulting to first candidate.")
-
-        return 0  # Default to first candidate if judging fails
-
-    def _build_character_map(self):
-        """
-        Scans the character directory to build a lookup map.
-        Maps: 'Canonical Name', 'Folder Name', and 'Last Name' -> Folder Path
-        Example: "Professor Aronnax", "professor_aronnax", "Aronnax" -> /path/to/professor_aronnax
-        """
-        if not self.char_base_dir.exists():
-            return
-
-        for char_folder in self.char_base_dir.iterdir():
-            if not char_folder.is_dir():
-                continue
-            
-            metadata_path = char_folder / "metadata.json"
-            if not metadata_path.exists():
-                continue
-
-            try:
-                with open(metadata_path, "r") as f:
-                    meta = json.load(f)
-                    
-                folder_name = char_folder.name
-                canonical_name = meta.get('name', '').lower()
-                
-                # 1. Map folder name (exact match)
-                self.character_map[folder_name.lower()] = char_folder
-                
-                # 2. Map canonical name (exact match)
-                if canonical_name:
-                    self.character_map[canonical_name] = char_folder
-                    
-                    # 3. Map last name/single name variants
-                    parts = canonical_name.split()
-                    if len(parts) > 1:
-                        last_name = parts[-1]
-                        # Only map last name if it's unique (simple collision avoidance)
-                        if last_name not in self.character_map:
-                            self.character_map[last_name] = char_folder
-            except Exception as e:
-                print(f"⚠️ Error reading metadata for {char_folder}: {e}")
-
-    @retry_with_backoff()
     async def generate_character_reference(self, char_data: dict, style: str):
-        """
-        Generates reference images for a character from the asset manifest.
-        When multi-pass is enabled, generates multiple candidates and uses LLM judge to select best.
-        """
-        name = char_data.get('name', 'Unknown')
-        folder_name = name.lower().replace(" ", "_")
-        char_folder = self.char_base_dir / folder_name
+        """Delegate to ReferenceAgent."""
+        return await self.reference_agent.generate_character_reference(char_data, style)
 
-        # Check if already designed
-        if self.manifest.is_character_designed(name):
-            print(f"⏭️  Skipping {name} (Already designed)")
-            return
-
-        async with self.ref_limiter:
-            char_folder.mkdir(parents=True, exist_ok=True)
-            description = char_data.get('description', '')
-            img_prompt = f"Character sheet for {name}. {description}. Front view, side profile, and 3/4 view. White background, {style} style, high detail."
-
-            # Three-tier fallback models
-            models_to_try = [
-                config.image_model_primary,
-                config.image_model_fallback,
-                config.image_model_last_resort
-            ]
-
-            # Determine number of candidates to generate
-            num_candidates = self.ref_candidates if self.enable_multi_pass_refs else 1
-            print(f"🎨 Generating {num_candidates} reference sheet candidate(s) for: {name}...")
-
-            # Generate multiple candidates
-            candidates = []
-            for candidate_idx in range(num_candidates):
-                # Acquire TPM capacity for each candidate
-                estimated_tokens = estimate_tokens_for_image(img_prompt, num_reference_images=0)
-                await get_tpm_limiter().acquire(estimated_tokens)
-
-                response = None
-                last_error = None
-
-                for model in models_to_try:
-                    try:
-                        response = await get_client().aio.models.generate_content(
-                            model=model,
-                            contents=img_prompt,
-                            config=types.GenerateContentConfig(
-                                response_modalities=["IMAGE"],
-                                image_config=types.ImageConfig(aspect_ratio="1:1")
-                            )
-                        )
-                        break
-                    except Exception as e:
-                        last_error = e
-                        error_msg = str(e).lower()
-                        if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
-                            print(f"⚠️ Model {model} unavailable. Trying next...")
-                            continue
-                        else:
-                            raise e
-
-                if response is None:
-                    if candidate_idx == 0:
-                        raise last_error or Exception(f"All image models failed for {name}")
-                    else:
-                        print(f"   ⚠️ Could not generate candidate {candidate_idx + 1}, continuing with {len(candidates)} candidates")
-                        break
-
-                # Update TPM with actual INPUT usage
-                input_tokens, output_tokens = extract_token_usage(response)
-                get_tpm_limiter().update_actual_usage(estimated_tokens, input_tokens)
-
-                # Extract PIL image from response
-                for part in response.parts:
-                    if part.inline_data:
-                        img = part.as_image()
-                        pil_img = Image.open(io.BytesIO(img.image_bytes))
-                        candidates.append(pil_img)
-                        print(f"   ✓ Generated candidate {candidate_idx + 1}/{num_candidates}")
-                        break
-
-            # Select best candidate using LLM judge (if multiple candidates)
-            if len(candidates) > 1 and self.enable_multi_pass_refs:
-                best_idx = await self._select_best_reference(candidates, char_data)
-                best_image = candidates[best_idx]
-            else:
-                best_idx = 0
-                best_image = candidates[0] if candidates else None
-
-            if best_image is None:
-                raise Exception(f"No valid reference images generated for {name}")
-
-            # Save the best reference image
-            paths = []
-            path = char_folder / f"ref_0.png"
-            best_image.save(path, format="PNG", optimize=True)
-            paths.append(str(path))
-
-            # Optionally save all candidates for debugging (in subdirectory)
-            if len(candidates) > 1:
-                candidates_dir = char_folder / "candidates"
-                candidates_dir.mkdir(exist_ok=True)
-                for i, candidate in enumerate(candidates):
-                    candidate_path = candidates_dir / f"candidate_{i}.png"
-                    candidate.save(candidate_path, format="PNG", optimize=True)
-                print(f"   📁 All {len(candidates)} candidates saved in: {candidates_dir}")
-
-            # Save metadata
-            metadata = {
-                "name": name,
-                "description": description,
-                "age_range": char_data.get('age_range', 'unknown'),
-                "occupation": char_data.get('occupation', 'unknown'),
-                "distinctive_items": char_data.get('distinctive_items', []),
-                "reference_images": paths,
-                "generation_method": "multi_pass" if num_candidates > 1 else "single_pass",
-                "candidates_evaluated": len(candidates),
-                "selected_candidate": best_idx
-            }
-            with open(char_folder / "metadata.json", "w") as f:
-                json.dump(metadata, f, indent=2)
-
-            self.manifest.mark_character_designed(name)
-            print(f"✅ {name} designed! (Selected candidate {best_idx + 1}/{len(candidates)}) Assets saved in: {char_folder}")
-
-    @retry_with_backoff()
     async def generate_object_reference(self, obj_data: dict, style: str):
-        """
-        Generates reference images for a key object from the asset manifest.
-        """
-        name = obj_data.get('name', 'Unknown')
-        folder_name = name.lower().replace(" ", "_")
-        obj_folder = self.obj_base_dir / folder_name
-
-        # Check if already designed
-        if (obj_folder / "metadata.json").exists():
-            print(f"⏭️  Skipping {name} (Already designed)")
-            return
-
-        async with self.ref_limiter:
-            print(f"⚙️ Generating reference sheet for: {name}...")
-            obj_folder.mkdir(parents=True, exist_ok=True)
-
-            description = obj_data.get('description', '')
-            key_features = obj_data.get('key_features', [])
-            condition = obj_data.get('condition', '')
-            material = obj_data.get('material_context', '')
-            
-            features_str = ", ".join(key_features) if key_features else ""
-
-            img_prompt = f"Concept art sheet for {name}. {description}. {features_str}. Condition: {condition}. Materials: {material}. Show: 1. Full view. 2. Detail close-up. 3. Alternate angle. Style: {style}. White background. Clean lines."
-
-            # Acquire TPM capacity for object reference generation
-            obj_estimated_tokens = estimate_tokens_for_image(img_prompt, num_reference_images=0)
-            await get_tpm_limiter().acquire(obj_estimated_tokens)
-
-            # Three-tier fallback
-            models_to_try = [
-                config.image_model_primary,
-                config.image_model_fallback,
-                config.image_model_last_resort
-            ]
-
-            response = None
-            last_error = None
-
-            for model in models_to_try:
-                try:
-                    response = await get_client().aio.models.generate_content(
-                        model=model,
-                        contents=img_prompt,
-                        config=types.GenerateContentConfig(
-                            response_modalities=["IMAGE"],
-                            image_config=types.ImageConfig(aspect_ratio="1:1")
-                        )
-                    )
-                    break
-                except Exception as e:
-                    last_error = e
-                    error_msg = str(e).lower()
-                    if "429" in error_msg or "404" in error_msg or "not found" in error_msg:
-                        print(f"⚠️ Model {model} unavailable. Trying next...")
-                        continue
-                    else:
-                        raise e
-
-            if response is None:
-                raise last_error or Exception(f"All image models failed for {name}")
-
-            # Update TPM with actual INPUT usage only (output image tokens shouldn't count toward TPM)
-            obj_input, obj_output = extract_token_usage(response)
-            get_tpm_limiter().update_actual_usage(obj_estimated_tokens, obj_input)
-
-            # Save images with PNG optimization
-            paths = []
-            for i, part in enumerate(response.parts):
-                if part.inline_data:
-                    img = part.as_image()
-                    # Convert google.genai.types.Image to PIL Image
-                    pil_img = Image.open(io.BytesIO(img.image_bytes))
-                    path = obj_folder / f"ref_{i}.png"
-                    pil_img.save(path, format="PNG", optimize=True)
-                    paths.append(str(path))
-
-            # Save metadata
-            metadata = {
-                "name": name,
-                "description": description,
-                "key_features": key_features,
-                "condition": condition,
-                "material_context": material,
-                "type": "object",
-                "reference_images": paths
-            }
-            with open(obj_folder / "metadata.json", "w") as f:
-                json.dump(metadata, f, indent=2)
-
-            print(f"✅ {name} designed! Assets saved in: {obj_folder}")
+        """Delegate to ReferenceAgent."""
+        return await self.reference_agent.generate_object_reference(obj_data, style)
 
     async def generate_all_references(self, style: str):
-        """
-        Generates reference images for all characters and objects in the asset manifest.
-        This should be called before panel generation.
-        """
-        # Load asset manifest
-        manifest_path = self.script_path.parent / f"{self.script_path.stem.replace('_full_script', '').replace('_test_page', '')}_assets.json"
-
-        if not manifest_path.exists():
-            print(f"⚠️ Asset manifest not found at {manifest_path}. Skipping reference generation.")
-            return
-
-        with open(manifest_path, "r") as f:
-            asset_manifest = json.load(f)
-
-        characters = asset_manifest.get('characters', [])
-        objects = asset_manifest.get('objects', [])
-
-        print(f"\n🎨 Generating reference sheets for {len(characters)} characters and {len(objects)} objects...")
-
-        # Generate character references (with error handling)
-        char_tasks = [self.generate_character_reference(char, style) for char in characters]
-        char_results = await asyncio.gather(*char_tasks, return_exceptions=True)
-
-        # Log any character generation failures
-        for i, result in enumerate(char_results):
-            if isinstance(result, Exception):
-                char_name = characters[i].get('name', f'Character {i+1}')
-                print(f"   ❌ Character '{char_name}' reference failed: {result}")
-
-        # Generate object references (with error handling)
-        obj_tasks = [self.generate_object_reference(obj, style) for obj in objects]
-        obj_results = await asyncio.gather(*obj_tasks, return_exceptions=True)
-
-        # Log any object generation failures
-        for i, result in enumerate(obj_results):
-            if isinstance(result, Exception):
-                obj_name = objects[i].get('name', f'Object {i+1}')
-                print(f"   ❌ Object '{obj_name}' reference failed: {result}")
-
-        # Rebuild character map after generating new references
-        self._build_character_map()
-        self.known_objects = [d.name for d in self.obj_base_dir.iterdir() if d.is_dir()]
-
-        print("✅ All reference sheets generated!")
+        """Delegate to ReferenceAgent."""
+        await self.reference_agent.generate_all_references(style)
+        # Update local references after generation
+        self.known_objects = self.reference_agent.known_objects
+        self.character_map = self.reference_agent.character_map
 
     def load_character_refs(self, char_name: str):
-        """
-        Lazy-loads character reference images on-demand and caches them.
-        Only loads what's needed for the current panel, significantly reducing memory usage.
-
-        Args:
-            char_name: The character name to load references for
-
-        Returns:
-            tuple: (list of PIL Images, metadata dict) or ([], {}) if not found
-        """
-        # Check cache first
-        if char_name in self._character_cache:
-            return self._character_cache[char_name], self._metadata_cache[char_name]
-
-        # Resolve character folder using the map
-        char_key = char_name.lower().strip()
-        char_folder = self.character_map.get(char_key)
-        
-        # Try finding by partial match if exact key missing (e.g., "Dr. Aronnax" -> "aronnax")
-        if not char_folder:
-            parts = char_key.split()
-            if parts:
-                base_name = parts[-1]
-                char_folder = self.character_map.get(base_name)
-
-        if not char_folder or not char_folder.exists():
-            # Fallback: legacy normalization attempt (mostly for debug)
-            # from character_architect import CharacterArchitect
-            # arch = CharacterArchitect("") 
-            # _, folder_name = arch.normalize_character_name(char_name)
-            # char_folder = self.char_base_dir / folder_name
-            # if not char_folder.exists():
-            print(f"⚠️ Warning: Character assets not found for '{char_name}'")
-            return [], {}
-
-        metadata_path = char_folder / "metadata.json"
-        if not metadata_path.exists():
-            print(f"⚠️ Warning: No metadata found for {char_name}")
-            return [], {}
-
-        # Load metadata and reference images
-        with open(metadata_path, "r") as f:
-            meta = json.load(f)
-
-        ref_images = []
-        for img_path_str in meta.get('reference_images', []):
-            img_path = Path(img_path_str)
-            if img_path.exists():
-                ref_images.append(Image.open(img_path))
-
-        # Cache for future use (cache by the REQUESTED name to speed up subsequent hits)
-        self._character_cache[char_name] = ref_images
-        self._metadata_cache[char_name] = meta
-
-        if ref_images:
-            print(f"  📂 Lazy-loaded {len(ref_images)} refs for '{char_name}' (mapped to {meta.get('name')})")
-
-        return ref_images, meta
+        """Delegate to ReferenceAgent for lazy-loading character references."""
+        return self.reference_agent.load_character_refs(char_name)
 
     def load_object_refs(self, obj_name: str):
-        """
-        Lazy-loads object reference images on-demand.
-        """
-        # Check cache
-        if obj_name in self._object_cache:
-            return self._object_cache[obj_name], self._object_metadata_cache[obj_name]
-
-        obj_folder = self.obj_base_dir / obj_name
-        metadata_path = obj_folder / "metadata.json"
-
-        if not metadata_path.exists():
-            return [], {}
-
-        with open(metadata_path, "r") as f:
-            meta = json.load(f)
-
-        ref_images = []
-        for img_path_str in meta.get('reference_images', []):
-            img_path = Path(img_path_str)
-            if img_path.exists():
-                ref_images.append(Image.open(img_path))
-
-        # Cache
-        self._object_cache[obj_name] = ref_images
-        self._object_metadata_cache[obj_name] = meta
-        
-        if ref_images:
-            print(f"  📂 Lazy-loaded {len(ref_images)} refs for Object: {meta.get('name', obj_name)}")
-
-        return ref_images, meta
+        """Delegate to ReferenceAgent for lazy-loading object references."""
+        return self.reference_agent.load_object_refs(obj_name)
 
     async def _call_generate_content(self, model_name: str, input_contents: list):
         """Helper to call the API with a specific model."""
@@ -661,14 +218,14 @@ Analyze each candidate and respond with ONLY a JSON object:
             contents=input_contents,
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
-                image_config=types.ImageConfig(aspect_ratio="4:3") 
+                image_config=types.ImageConfig(aspect_ratio="4:3")
             )
         )
 
     @retry_with_backoff(max_retries=3) # Image generation can be more brittle
     async def generate_panel(self, page_num: int, panel_data: dict, prev_panel_context: str = None, next_panel_context: str = None, prev_panel_image: Image.Image = None):
         panel_id = panel_data['panel_id']
-        
+
         # Check if already complete
         if self.manifest.is_panel_complete(page_num, panel_id):
             print(f"   ⏭️  Skipping Page {page_num}, Panel {panel_id} (Already in manifest)")
@@ -688,7 +245,7 @@ Analyze each candidate and respond with ONLY a JSON object:
                 composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the BOTTOM-LEFT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
             elif bubble_pos == "bottom-right":
                 composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the BOTTOM-RIGHT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
-            
+
             # 1. Construct the master prompt
             # Parse structured advice if available, fall back to string for backward compatibility
             advice_data = panel_data.get('advice', {})
@@ -708,7 +265,7 @@ Analyze each candidate and respond with ONLY a JSON object:
                 narrative_flow += f"\nPREVIOUS PANEL ACTION (Sequence Context): {prev_panel_context}"
             if next_panel_context:
                 narrative_flow += f"\nNEXT PANEL ACTION (Sequence Context): {next_panel_context}"
-            
+
             # Build era constraints block if set
             era_block = ""
             if self.era_constraints:
@@ -756,7 +313,7 @@ Analyze each candidate and respond with ONLY a JSON object:
             REQUIREMENTS: High quality comic panel art. Maintain consistency with provided character references. ALL clothing, technology, and props MUST be era-appropriate.
             CRITICAL NEGATIVE CONSTRAINT: Do NOT render any text, words, speech bubbles, captions, or EMPTY BOUNDING BOXES/FRAMES in the image. The image must be pure text-free art without any placeholders, graphical UI elements, or white boxes. Text will be added separately in post-production.
             """
-            
+
             # 2. Gather necessary character references for this specific panel (lazy loading)
             input_contents = [master_prompt]
 
@@ -770,7 +327,7 @@ Analyze each candidate and respond with ONLY a JSON object:
 
             chars_included = []
             char_descriptions = []
-            
+
             # A. Process Characters
             for char_name in present_chars:
                 # Lazy-load character refs on-demand
@@ -784,19 +341,19 @@ Analyze each candidate and respond with ONLY a JSON object:
                     desc = metadata.get('description', "")
                     if desc:
                         char_descriptions.append(f"CHARACTER {char_name}: {desc}")
-            
+
             # B. Process Objects (Explicit + Keyword Search)
             objects_included = []
             processed_obj_names = set()
             vis_desc_lower = panel_data['visual_description'].lower()
-            
+
             # 1. Explicit Objects from Script (New Method)
             explicit_objects = panel_data.get('key_objects', [])
             for obj_name in explicit_objects:
                 # Try to map the script name to a folder name
                 # We can reuse the keyword logic or simple normalization
                 norm_name = obj_name.lower().replace(" ", "_")
-                
+
                 # Check if this maps to a known object folder
                 target_folder = None
                 if norm_name in self.known_objects:
@@ -807,7 +364,7 @@ Analyze each candidate and respond with ONLY a JSON object:
                         if ko in norm_name or norm_name in ko:
                             target_folder = ko
                             break
-                
+
                 if target_folder and target_folder not in processed_obj_names:
                     ref_images, metadata = self.load_object_refs(target_folder)
                     if ref_images:
@@ -815,17 +372,17 @@ Analyze each candidate and respond with ONLY a JSON object:
                         real_name = metadata.get('name', obj_name)
                         objects_included.append(real_name)
                         processed_obj_names.add(target_folder)
-                        
+
                         desc = metadata.get('description', "")
                         condition = metadata.get('condition', "")
                         material = metadata.get('material_context', "")
-                        
+
                         full_desc = f"OBJECT {real_name}: {desc}"
                         if condition:
                             full_desc += f" (Condition: {condition})"
                         if material:
                             full_desc += f" (Material: {material})"
-                        
+
                         char_descriptions.append(full_desc)
 
             # 2. Keyword Search Fallback (Legacy Method)
@@ -835,7 +392,7 @@ Analyze each candidate and respond with ONLY a JSON object:
 
                 # Check if the object name (or a clean version of it) is in the description
                 clean_name = obj_dir_name.replace("_", " ")
-                
+
                 # Simple loose matching
                 if clean_name in vis_desc_lower or obj_dir_name in vis_desc_lower:
                     ref_images, metadata = self.load_object_refs(obj_dir_name)
@@ -844,7 +401,7 @@ Analyze each candidate and respond with ONLY a JSON object:
                         real_name = metadata.get('name', clean_name)
                         objects_included.append(real_name)
                         processed_obj_names.add(obj_dir_name)
-                        
+
                         desc = metadata.get('description', "")
                         # Reuse metadata loading logic if we want consistency
                         char_descriptions.append(f"OBJECT {real_name}: {desc}")
@@ -854,7 +411,7 @@ Analyze each candidate and respond with ONLY a JSON object:
                 master_prompt += f"\n\nVISUAL REFERENCES:\n{desc_block}"
                 # Re-update the first part of input_contents which is the prompt
                 input_contents[0] = master_prompt
-            
+
             if chars_included:
                 print(f"   (Including refs for Chars: {', '.join(chars_included)})")
             if objects_included:
@@ -936,11 +493,29 @@ Analyze each candidate and respond with ONLY a JSON object:
                     pil_img.save(output_path, format="PNG", optimize=True)
                     print(f"   ✅ Saved: {output_path} (via {self.current_model})")
 
+                    # Run composition analysis for smart cropping and bubble placement
+                    if self.enable_composition_analysis:
+                        # Check for existing analysis (for resume runs)
+                        existing_analysis = None
+                        if config.reuse_existing_analysis:
+                            existing_analysis = self.composition_analyzer.load_existing_analysis(page_num, panel_id)
+
+                        if existing_analysis:
+                            print(f"   📂 Reusing existing composition analysis")
+                        else:
+                            print(f"   🔍 Running composition analysis...")
+                            try:
+                                analysis_result = await self.composition_analyzer.analyze_panel(pil_img, panel_data)
+                                self.composition_analyzer.save_analysis(page_num, panel_id, analysis_result)
+                                print(f"   ✓ Composition analysis saved (bubble: {analysis_result.recommended_bubble_position}, confidence: {analysis_result.bubble_confidence:.2f})")
+                            except Exception as e:
+                                print(f"   ⚠️ Composition analysis failed: {e}")
+
                     # Mark as complete in manifest
                     self.manifest.mark_panel_complete(page_num, panel_id)
 
                     # Return the image for consistency auditing
-                    return pil_img 
+                    return pil_img
 
     async def run_production(self):
         """
@@ -1067,14 +642,19 @@ Analyze each candidate and respond with ONLY a JSON object:
                 json.dump(consistency_issues, f, indent=2)
             print(f"   📝 Detailed report saved to: {report_path}")
 
+
+# Backward compatibility alias
+IllustratorAgent = PanelAgent
+
+
 if __name__ == "__main__":
     # Configuration
     # Point to your generated script JSON
     SCRIPT_FILE = "assets/output/20-thousand-leagues-under-the-sea_full_script.json"
-    
+
     # Define the overarching style. This should match what you used in the Scripting Agent.
     # Be Descriptive! This is appended to every single panel prompt.
     GLOBAL_STYLE = "Lush Watercolor comic book art. Dreamlike quality, soft color bleeds, visible paper texture. Ethereal lighting."
 
-    agent = IllustratorAgent(SCRIPT_FILE, GLOBAL_STYLE)
+    agent = PanelAgent(SCRIPT_FILE, GLOBAL_STYLE)
     asyncio.run(agent.run_production())

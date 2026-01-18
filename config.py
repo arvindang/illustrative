@@ -157,6 +157,13 @@ class PipelineConfig:
     image_aspect_ratio: str = "4:3"
     reference_image_aspect_ratio: str = "1:1"
 
+    # ==================== Image Composition Analysis ====================
+    # LLM-based analysis of generated panels for smart cropping and bubble placement
+    enable_image_composition_analysis: bool = True
+    composition_analysis_model: str = "gemini-2.5-flash"
+    composition_analysis_confidence_threshold: float = 0.7  # Min confidence to override script bubble position
+    reuse_existing_analysis: bool = True  # Reuse sidecar JSON on resume runs
+
     @classmethod
     def validate(cls) -> bool:
         """

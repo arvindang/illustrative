@@ -1,8 +1,6 @@
 import asyncio
 from pathlib import Path
-from scripting_agent import ScriptingAgent
-from illustrator_agent import IllustratorAgent
-from compositor_agent import CompositorAgent
+from agents import ScriptingAgent, IllustratorAgent, CompositorAgent
 
 async def run_production():
     """

@@ -16,7 +16,7 @@ ScriptingAgent → IllustratorAgent → CompositorAgent
     assets)
 ```
 
-### 1. ScriptingAgent (`scripting_agent.py`)
+### 1. ScriptingAgent (`agents/scripting_agent.py`)
 Uses Gemini Context Caching to load the full book (2M context window), then runs a **7-pass enrichment pipeline**:
 
 ```
@@ -63,13 +63,13 @@ PASS 6: Validation + Auto-Fix → _validation.json
 
 Output: `_full_script.json` + `_assets.json` + `_beats.json` + `_character_arcs.json` + `_adaptation.json` + `_validation.json`
 
-### 2. IllustratorAgent (`illustrator_agent.py`)
+### 2. IllustratorAgent (`agents/illustrator_agent.py`)
 Handles all image generation:
 - **Reference Sheets**: Generates character and object reference images from the asset manifest
 - **Panel Images**: Generates individual panel images using references for consistency
 - Implements 3-tier fallback logic between image models
 
-### 3. CompositorAgent (`compositor_agent.py`)
+### 3. CompositorAgent (`agents/compositor_agent.py`)
 Handles final assembly and export:
 - **Batch Layout**: Generates layouts for all pages in a single API call
 - **Composition**: Assembles panels into pages with dynamic layouts, overlays speech bubbles and captions
@@ -84,7 +84,7 @@ Handles final assembly and export:
 - `RateLimiter` class (utils.py) implements semaphore-based RPM throttling
 - Rate limits auto-adjust: AI Studio (5 RPM) vs Vertex AI (10-30 RPM based on quotas)
 - All API operations are async using `asyncio` for parallel processing
-- See `VERTEX_AI_QUESTIONS.md` for quota configuration and rate limit tuning
+- See `docs/VERTEX_AI_QUESTIONS.md` for quota configuration and rate limit tuning
 
 ### State Management & Resume Capability
 - `ProductionManifest` (utils.py) tracks completion status of pages, panels, and characters
@@ -101,14 +101,33 @@ Handles final assembly and export:
 - Character consistency uses reference images passed as PIL objects to image generation API
 - All model names are Vertex AI compatible (no AI Studio aliases)
 
-### Directory Structure
+### Project Structure
 ```
-assets/
-├── input/           # Source .txt files
-└── output/
-    ├── characters/  # Character metadata and reference images
-    ├── pages/       # Individual panel images
-    └── final_pages/ # Composed pages with text overlays
+illustrate-ai/
+├── agents/              # Core pipeline agents
+│   ├── scripting_agent.py
+│   ├── illustrator_agent.py
+│   └── compositor_agent.py
+├── api/                 # FastAPI routes (Railway deployment)
+├── models/              # SQLAlchemy models (User, Novel)
+├── migrations/          # Alembic database migrations
+├── storage/             # S3/bucket storage utilities
+├── tests/               # pytest test suite
+├── scripts/             # Utility/debug scripts
+├── docs/                # Documentation (PRD, GEMINI.md, etc.)
+├── deploy/              # Deployment configs (Procfile, railway.toml)
+├── assets/
+│   ├── input/           # Source .txt files
+│   └── output/          # Generated content
+│       ├── characters/  # Character reference images
+│       ├── pages/       # Individual panel images
+│       └── final_pages/ # Composed pages with text overlays
+├── app.py               # Streamlit UI entry point
+├── production_run.py    # CLI production entry point
+├── config.py            # Configuration
+├── constants.py         # Constants (styles, tones)
+├── utils.py             # Shared utilities
+└── validators.py        # Validation logic
 ```
 
 ## Common Commands
@@ -151,16 +170,31 @@ GOOGLE_GENAI_USE_VERTEXAI=true
 ```
 Then run: `gcloud auth application-default login`
 
-### Individual Agent Testing
+### Testing
 
-**Test scripting only:**
+**Run all tests:**
 ```bash
-python smoke_test.py
+pytest tests/ -v
+```
+
+**Test scripting only (JSON generation, no images):**
+```bash
+pytest tests/test_scripting_only.py -v
+```
+
+**Test full pipeline:**
+```bash
+pytest tests/test_full_pipeline.py -v
+```
+
+**Custom test options:**
+```bash
+pytest tests/test_scripting_only.py --input-file assets/input/alice.txt --style "Lush Watercolor" --pages 3 -v
 ```
 
 **Test character/object reference generation:**
 ```python
-from illustrator_agent import IllustratorAgent
+from agents import IllustratorAgent
 illustrator = IllustratorAgent(assets_path="assets/output/my_book_assets.json")
 await illustrator.generate_all_references(style="Botanical Illustration")
 ```
