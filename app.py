@@ -51,7 +51,7 @@ def get_db() -> Optional[Session]:
 def init_session_state():
     """Initialize session state variables."""
     # Read page from URL query params for initial load
-    valid_pages = {'home', 'login', 'register', 'dashboard', 'settings', 'generate', 'novel_detail'}
+    valid_pages = {'home', 'login', 'register', 'dashboard', 'generate', 'novel_detail'}
     url_page = st.query_params.get("page", "home")
     initial_page = url_page if url_page in valid_pages else 'home'
 
@@ -62,7 +62,6 @@ def init_session_state():
         'page': initial_page,  # Read from URL or default to home
 
         # Pipeline state
-        'api_key': '',
         'input_path': None,
         'word_count': 0,
         'is_running': False,
@@ -531,36 +530,6 @@ def render_dashboard():
     render_feedback_link()
 
 
-def render_settings_page():
-    """API key settings."""
-    st.title("🔑 API Key Settings")
-
-    has_key = db_has_api_key(st.session_state.user_id)
-
-    if has_key:
-        st.success("You have a Gemini API key saved.")
-        if st.button("🗑️ Delete Saved API Key"):
-            db_delete_api_key(st.session_state.user_id)
-            st.rerun()
-    else:
-        st.info("No API key saved.")
-
-    st.divider()
-    with st.form("api_key_form"):
-        api_key = st.text_input("Gemini API Key", type="password")
-        if st.form_submit_button("Save API Key", use_container_width=True):
-            if api_key:
-                db_save_api_key(st.session_state.user_id, api_key)
-                st.success("Saved!")
-                st.rerun()
-
-    st.divider()
-    render_feedback_link()
-
-    if st.button("← Back to Dashboard", use_container_width=True):
-        navigate_to('dashboard')
-
-
 def get_partial_content(user_id: str, novel_id: str) -> dict:
     """
     Check for partial content on disk for a novel.
@@ -649,7 +618,7 @@ def can_resume_novel(novel: dict) -> tuple:
     return True, 'illustrating', "Script exists, can resume illustration"
 
 
-async def resume_pipeline(status, novel: dict, api_key: str):
+async def resume_pipeline(status, novel: dict):
     """
     Resume a partially completed pipeline from the last checkpoint.
     """
@@ -845,34 +814,25 @@ def render_novel_detail_page():
                 st.subheader("Resume Generation")
                 st.info(f"This novel can be resumed. {resume_msg}")
 
-                saved_key = db_get_api_key(st.session_state.user_id)
+                if st.button("Resume Generation", type="primary", use_container_width=True):
+                    with st.status("Resuming...", expanded=True) as resume_status:
+                        try:
+                            db_update_novel(novel_id, status="processing")
+                            storage_keys = run_async(resume_pipeline(resume_status, novel))
 
-                if saved_key:
-                    if st.button("Resume Generation", type="primary", use_container_width=True):
-                        config.gemini_api_key = saved_key
-
-                        with st.status("Resuming...", expanded=True) as resume_status:
-                            try:
-                                db_update_novel(novel_id, status="processing")
-                                storage_keys = run_async(resume_pipeline(resume_status, novel, saved_key))
-
-                                resume_status.update(label="Completed!", state="complete")
-                                db_update_novel(
-                                    novel_id,
-                                    status="completed",
-                                    pdf_storage_key=storage_keys.get('pdf_storage_key'),
-                                    epub_storage_key=storage_keys.get('epub_storage_key')
-                                )
-                                st.rerun()
-                            except Exception as e:
-                                resume_status.update(label="Error", state="error")
-                                error_msg = str(e)[:2000]
-                                st.error(error_msg)
-                                db_update_novel(novel_id, status="failed", error_message=error_msg)
-                else:
-                    st.warning("Add your Gemini API key in Settings to resume this novel.")
-                    if st.button("Go to Settings"):
-                        navigate_to('settings')
+                            resume_status.update(label="Completed!", state="complete")
+                            db_update_novel(
+                                novel_id,
+                                status="completed",
+                                pdf_storage_key=storage_keys.get('pdf_storage_key'),
+                                epub_storage_key=storage_keys.get('epub_storage_key')
+                            )
+                            st.rerun()
+                        except Exception as e:
+                            resume_status.update(label="Error", state="error")
+                            error_msg = str(e)[:2000]
+                            st.error(error_msg)
+                            db_update_novel(novel_id, status="failed", error_message=error_msg)
 
     # Downloads (show for completed novels)
     if status == 'completed':
@@ -917,17 +877,7 @@ def render_generate_page():
         if st.button("← Dashboard"):
             navigate_to('dashboard')
 
-    st.subheader("1. API Key")
-    saved_key = db_get_api_key(st.session_state.user_id) if is_logged_in() else None
-
-    if saved_key:
-        st.success("Using saved API key")
-        api_key = saved_key
-    else:
-        api_key = st.text_input("Gemini API Key", type="password", value=st.session_state.api_key)
-        st.session_state.api_key = api_key
-
-    st.subheader("2. Upload Manuscript")
+    st.subheader("1. Upload Manuscript")
     uploaded_file = st.file_uploader("Choose a .txt file (max 10MB)", type=["txt"])
 
     if uploaded_file:
@@ -940,7 +890,7 @@ def render_generate_page():
         word_count = len(content.split())
         st.success(f"Loaded: {uploaded_file.name} ({word_count:,} words)")
 
-        st.subheader("3. Configuration")
+        st.subheader("2. Configuration")
         page_mode = st.radio("Pages", ["Quick Preview (10)", "Auto"], horizontal=True)
 
         if page_mode.startswith("Auto"):
@@ -950,7 +900,7 @@ def render_generate_page():
         style = st.selectbox("Art Style", ART_STYLES)
 
         # Era/Historical Period Constraints
-        st.subheader("4. Historical Era (Optional)")
+        st.subheader("3. Historical Era (Optional)")
         st.caption("Select an era to ensure period-accurate costumes, technology, and props")
         era_options = list(ERA_CONSTRAINTS.keys())
         selected_era = st.selectbox("Era Preset", ["None (auto-detect from text)"] + era_options)
@@ -970,9 +920,8 @@ def render_generate_page():
 
         st.divider()
 
-        if st.button("🚀 Generate", type="primary", disabled=not api_key or st.session_state.is_running, use_container_width=True):
+        if st.button("🚀 Generate", type="primary", disabled=st.session_state.is_running, use_container_width=True):
             st.session_state.is_running = True
-            config.gemini_api_key = api_key
 
             target_pages = 10 if page_mode.startswith("Quick") else page_calc['recommended']
             test_mode = page_mode.startswith("Quick")
@@ -1194,10 +1143,6 @@ def main():
         if not is_logged_in():
             navigate_to('login')
         render_dashboard()
-    elif page == 'settings':
-        if not is_logged_in():
-            navigate_to('login')
-        render_settings_page()
     elif page == 'generate':
         render_generate_page()
     elif page == 'novel_detail':
