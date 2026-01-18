@@ -170,6 +170,39 @@ GOOGLE_GENAI_USE_VERTEXAI=true
 ```
 Then run: `gcloud auth application-default login`
 
+### Access Control (Admin Allowlist)
+
+The app uses a hosted Vertex AI backend (no user API keys). To control costs, access can be restricted to specific email addresses using `ADMIN_EMAILS`.
+
+**Environment variable:**
+```
+ADMIN_EMAILS=arvin@arvindang.com
+```
+
+**Behavior:**
+| ADMIN_EMAILS value | Behavior |
+|-------------------|----------|
+| Not set / empty | Open access (anyone can register/login) |
+| Single email | Only that email can login; registration blocked |
+| Comma-separated | Multiple admins allowed |
+
+**Railway CLI commands:**
+```bash
+# View current setting
+railway variables | grep ADMIN_EMAILS
+
+# Restrict to single admin
+railway variables --set "ADMIN_EMAILS=arvin@arvindang.com"
+
+# Add multiple admins
+railway variables --set "ADMIN_EMAILS=arvin@arvindang.com,other@example.com"
+
+# Open access to everyone (remove restriction)
+railway variables --set "ADMIN_EMAILS="
+```
+
+**Implementation:** `config.py` (`PipelineConfig.admin_emails`, `is_admin_email()`, `get_admin_emails()`)
+
 ### Testing
 
 **Run all tests:**
