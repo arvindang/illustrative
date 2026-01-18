@@ -56,14 +56,14 @@ class PipelineConfig:
     validation_model: str = "gemini-2.5-flash"                 # Pass 6: Validation
 
     # Image Models (priority order for fallback)
-    # Note: nano-banana-pro-preview is an AI Studio alias; Vertex AI requires official model names
-    image_model_primary: str = "gemini-3-pro-image-preview"
-    image_model_fallback: str = "gemini-2.5-flash-preview-image"
-    image_model_last_resort: str = "gemini-2.5-flash-image"
+    # Using stable Gemini 3 models for production reliability
+    image_model_primary: str = "gemini-3-pro-image"       # Stable, high-fidelity, up to 14 reference inputs
+    image_model_fallback: str = "gemini-3-flash"          # Stable, fast, good quality
+    image_model_last_resort: str = "gemini-2.5-flash-image"  # Legacy fallback
 
     # Character Design Models
-    character_model_attributes: str = "gemini-3-flash-preview"
-    character_model_image: str = "gemini-3-pro-image-preview"
+    character_model_attributes: str = "gemini-3-flash"        # Stable for text/attributes
+    character_model_image: str = "gemini-3-pro-image"         # Stable for reference sheets
 
     # ==================== Rate Limiting ====================
     # Requests per minute (RPM) - these are defaults, adjusted by get_effective_rate_limits()

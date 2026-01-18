@@ -666,7 +666,7 @@ Analyze each candidate and respond with ONLY a JSON object:
         )
 
     @retry_with_backoff(max_retries=3) # Image generation can be more brittle
-    async def generate_panel(self, page_num: int, panel_data: dict, prev_panel_context: str = None, next_panel_context: str = None):
+    async def generate_panel(self, page_num: int, panel_data: dict, prev_panel_context: str = None, next_panel_context: str = None, prev_panel_image: Image.Image = None):
         panel_id = panel_data['panel_id']
         
         # Check if already complete
@@ -728,10 +728,23 @@ Analyze each candidate and respond with ONLY a JSON object:
             {scene_context}
             """
 
+            # Build continuity instruction if previous panel image is available
+            continuity_instruction = ""
+            if prev_panel_image is not None:
+                continuity_instruction = """
+            VISUAL CONTINUITY (CRITICAL): A reference image of the PREVIOUS PANEL is provided below. You MUST maintain:
+            - Same art style, line weight, and rendering technique
+            - Consistent lighting direction and color temperature
+            - Matching environment details (architecture, props, background elements)
+            - Continuous color palette and mood
+            - Character scale relative to environment
+            """
+
             master_prompt = f"""
             STYLE DIRECTIVE: {self.style_prompt}
             {era_block}
             {scene_context_block}
+            {continuity_instruction}
             PANEL VISUALS: {panel_data['visual_description']}
 
             NARRATIVE FLOW:{narrative_flow}
@@ -746,6 +759,13 @@ Analyze each candidate and respond with ONLY a JSON object:
             
             # 2. Gather necessary character references for this specific panel (lazy loading)
             input_contents = [master_prompt]
+
+            # 2a. Include previous panel image for visual continuity (environment, lighting, style)
+            if prev_panel_image is not None:
+                input_contents.append("\n--- PREVIOUS PANEL (Maintain environment, lighting, and style continuity) ---")
+                input_contents.append(prev_panel_image)
+                print(f"   (Including previous panel image for continuity)")
+
             present_chars = panel_data.get('characters', [])
 
             chars_included = []
@@ -842,8 +862,12 @@ Analyze each candidate and respond with ONLY a JSON object:
 
             # Acquire TPM capacity for panel generation
             # Count reference images (everything after the prompt in input_contents)
+            # This includes: previous panel image (if any), character refs, object refs
             num_ref_images = len(input_contents) - 1
             panel_estimated_tokens = estimate_tokens_for_image(master_prompt, num_reference_images=num_ref_images)
+            if prev_panel_image is not None:
+                # Previous panel image adds ~1500 tokens (counted in num_ref_images but log it)
+                print(f"   (Token estimate includes {num_ref_images} reference images)")
             await get_tpm_limiter().acquire(panel_estimated_tokens)
 
             # 3. Call the API with Three-Tier Fallback Logic
@@ -945,6 +969,9 @@ Analyze each candidate and respond with ONLY a JSON object:
         # 3. Process page by page for consistency auditing
         consistency_issues = []
 
+        # Track the last successfully generated panel image for continuity
+        last_panel_image = None
+
         for page in script_data:
             page_num = page['page_number']
             panels = page['panels']
@@ -956,13 +983,14 @@ Analyze each candidate and respond with ONLY a JSON object:
 
             print(f"\n📄 Processing Page {page_num} ({len(panels)} panels)...")
 
-            # Generate panels for this page
-            page_tasks = []
+            # Process panels SEQUENTIALLY for visual continuity
+            # Each panel receives the previous panel's image for style/environment consistency
+            page_images = []
             for panel_idx, panel in enumerate(panels):
                 # Calculate global index for context
                 global_idx = sum(len(p['panels']) for p in script_data if p['page_number'] < page_num) + panel_idx
 
-                # Determine Previous Context
+                # Determine Previous Context (text description)
                 prev_context = None
                 if global_idx > 0:
                     prev_item = all_panels[global_idx - 1]
@@ -971,7 +999,7 @@ Analyze each candidate and respond with ONLY a JSON object:
                     context_prefix = "[PREVIOUS PAGE FINAL PANEL] " if prev_page != page_num else ""
                     prev_context = f"{context_prefix}{prev_desc}"
 
-                # Determine Next Context
+                # Determine Next Context (text description)
                 next_context = None
                 if global_idx < total_panels - 1:
                     next_item = all_panels[global_idx + 1]
@@ -980,20 +1008,25 @@ Analyze each candidate and respond with ONLY a JSON object:
                     context_prefix = "[NEXT PAGE FIRST PANEL] " if next_page != page_num else ""
                     next_context = f"{context_prefix}{next_desc}"
 
-                page_tasks.append(self.generate_panel(page_num, panel, prev_context, next_context))
-
-            # Execute all panels for this page (with error handling)
-            page_results = await asyncio.gather(*page_tasks, return_exceptions=True)
-
-            # Process results - separate successful images from failures
-            page_images = []
-            for i, result in enumerate(page_results):
-                if isinstance(result, Exception):
-                    panel_id = panels[i].get('panel_id', i + 1)
-                    print(f"      ❌ Panel {panel_id} failed: {result}")
+                # Generate panel with previous panel image for visual continuity
+                try:
+                    result = await self.generate_panel(
+                        page_num,
+                        panel,
+                        prev_context,
+                        next_context,
+                        prev_panel_image=last_panel_image
+                    )
+                    if result is not None:
+                        page_images.append(result)
+                        last_panel_image = result  # Update for next panel
+                    else:
+                        page_images.append(None)
+                except Exception as e:
+                    panel_id = panel.get('panel_id', panel_idx + 1)
+                    print(f"      ❌ Panel {panel_id} failed: {e}")
                     page_images.append(None)
-                else:
-                    page_images.append(result)
+                    # Don't update last_panel_image on failure - keep previous good image
 
             # Filter out None values for consistency audit
             page_images = [img for img in page_images if img is not None]

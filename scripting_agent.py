@@ -1259,7 +1259,8 @@ class ScriptingAgent:
         character_arcs: dict = None,
         assets: dict = None,
         prev_page: dict = None,
-        next_page: dict = None
+        next_page: dict = None,
+        prev_page_script: dict = None
     ):
         """
         PASS 5: THE SCRIPTWRITER (Enhanced)
@@ -1268,7 +1269,8 @@ class ScriptingAgent:
         Enhanced features:
         - Uses character_arcs for scene-specific gear, emotional states, AND voice profiles
         - Uses assets for interaction_rules and location context
-        - Uses prev_page/next_page for scene continuity across page boundaries
+        - Uses prev_page/next_page BLUEPRINTS for scene continuity
+        - Uses prev_page_script (ACTUAL generated script) for dialogue flow continuity
 
         Args:
             blueprint_item: Blueprint data for this page
@@ -1278,6 +1280,7 @@ class ScriptingAgent:
             assets: Asset manifest with locations and interaction rules
             prev_page: Blueprint of previous page (for continuity)
             next_page: Blueprint of next page (for setup/payoff)
+            prev_page_script: ACTUAL generated script from previous page (for dialogue continuity)
         """
         page_num = blueprint_item['page_number']
         focus_text = blueprint_item.get('focus_text', "")
@@ -1387,24 +1390,52 @@ class ScriptingAgent:
 
         # Build adjacent page context for scene continuity
         continuity_context = ""
-        if prev_page or next_page:
-            continuity_parts = []
-            if prev_page:
-                prev_chars = ', '.join(prev_page.get('key_characters', []))
-                prev_scene = prev_page.get('scene_type', 'dialogue')
-                continuity_parts.append(f"PREVIOUS PAGE ({prev_page.get('page_number')}): {prev_page.get('summary', '')} (Characters: {prev_chars}, Scene: {prev_scene})")
-            if next_page:
-                next_chars = ', '.join(next_page.get('key_characters', []))
-                next_scene = next_page.get('scene_type', 'dialogue')
-                continuity_parts.append(f"NEXT PAGE ({next_page.get('page_number')}): {next_page.get('summary', '')} (Characters: {next_chars}, Scene: {next_scene})")
+        continuity_parts = []
 
-            if continuity_parts:
-                continuity_context = f"""
-            SCENE CONTINUITY (ensure smooth transitions):
+        # Use ACTUAL previous page script if available (for dialogue flow)
+        if prev_page_script:
+            # Extract the last 2-3 panels' dialogue from the previous page
+            prev_panels = prev_page_script.get('panels', [])[-3:]
+            prev_dialogue_lines = []
+            for panel in prev_panels:
+                # Handle both single dialogue and multiple bubbles
+                bubbles = panel.get('dialogue_bubbles', [])
+                if bubbles:
+                    for bubble in bubbles:
+                        speaker = bubble.get('speaker', 'Unknown')
+                        text = bubble.get('text', '')
+                        if text:
+                            prev_dialogue_lines.append(f'    {speaker}: "{text}"')
+                elif panel.get('dialogue'):
+                    chars = panel.get('characters', ['Someone'])
+                    prev_dialogue_lines.append(f'    {chars[0] if chars else "Someone"}: "{panel["dialogue"]}"')
+                if panel.get('caption'):
+                    prev_dialogue_lines.append(f'    [Caption]: "{panel["caption"]}"')
+
+            if prev_dialogue_lines:
+                continuity_parts.append(f"""PREVIOUS PAGE DIALOGUE (Page {prev_page_script.get('page_number')}) - CONTINUE THIS CONVERSATION:
+{chr(10).join(prev_dialogue_lines)}
+
+    Your dialogue MUST flow naturally from this. Don't repeat what was said. Continue or respond to it.""")
+
+        # Also include blueprint context for scene setup
+        if prev_page:
+            prev_chars = ', '.join(prev_page.get('key_characters', []))
+            prev_scene = prev_page.get('scene_type', 'dialogue')
+            continuity_parts.append(f"PREVIOUS PAGE CONTEXT ({prev_page.get('page_number')}): {prev_page.get('summary', '')} (Characters: {prev_chars}, Scene: {prev_scene})")
+
+        if next_page:
+            next_chars = ', '.join(next_page.get('key_characters', []))
+            next_scene = next_page.get('scene_type', 'dialogue')
+            continuity_parts.append(f"NEXT PAGE PREVIEW ({next_page.get('page_number')}): {next_page.get('summary', '')} (Characters: {next_chars}, Scene: {next_scene})")
+
+        if continuity_parts:
+            continuity_context = f"""
+            SCENE CONTINUITY (CRITICAL for dialogue flow):
             {chr(10).join(continuity_parts)}
 
-            - If characters appear on previous page, they should enter/continue naturally
-            - If setting changes, show the transition (travel, doorway, cut)
+            - Continue conversations naturally - don't restart topics already discussed
+            - If characters appear on previous page, maintain their emotional state
             - Set up any reveals/events that happen on the next page
             """
 
@@ -1454,12 +1485,14 @@ class ScriptingAgent:
                - 'panel_size': One of "large" (50%+ of page), "medium" (25-50%), "small" (15-25%)
                  * Use "large" for dramatic reveals, action climaxes, establishing shots
                  * Use "small" for rapid action sequences, reactions, transitions
-            4. Use 'dialogue' for character speech ONLY:
-               - MAXIMUM 80 characters per dialogue field
-               - Short, punchy speech bubbles only
-               - NO stage directions, NO sound effects
+            4. For character DIALOGUE, you have TWO options:
+               OPTION A - Single speaker: Use 'dialogue' field (MAXIMUM 120 characters)
+               OPTION B - Multiple speakers: Use 'dialogue_bubbles' array for 2-3 speakers in same panel:
+                 [{{"speaker": "Character Name", "text": "Their line (max 120 chars)", "position": "top-left"}}]
+                 Positions: "top-left", "top-right", "bottom-left", "bottom-right"
+               - Keep dialogue punchy and natural - no stage directions
                - If dialogue is interrupted, use em-dash: "Wait—"
-            5. Use 'caption' for narration boxes (MAXIMUM 100 chars)
+            5. Use 'caption' for narration boxes (MAXIMUM 140 chars)
             6. For EACH panel, provide a STRUCTURED 'advice' object with:
                - 'scene_type': "{scene_type}"
                - 'required_gear': Object mapping character names to gear list
@@ -1503,6 +1536,21 @@ class ScriptingAgent:
                                         "panel_id": {"type": "INTEGER"},
                                         "visual_description": {"type": "STRING"},
                                         "dialogue": {"type": "STRING"},
+                                        "dialogue_bubbles": {
+                                            "type": "ARRAY",
+                                            "items": {
+                                                "type": "OBJECT",
+                                                "properties": {
+                                                    "speaker": {"type": "STRING"},
+                                                    "text": {"type": "STRING"},
+                                                    "position": {
+                                                        "type": "STRING",
+                                                        "enum": ["top-left", "top-right", "bottom-left", "bottom-right"]
+                                                    }
+                                                },
+                                                "required": ["speaker", "text", "position"]
+                                            }
+                                        },
                                         "caption": {"type": "STRING"},
                                         "characters": {"type": "ARRAY", "items": {"type": "STRING"}},
                                         "key_objects": {"type": "ARRAY", "items": {"type": "STRING"}},
@@ -1565,45 +1613,308 @@ class ScriptingAgent:
             result['page_number'] = page_num
 
             # Enforce text length limits (safety net if LLM doesn't follow instructions)
-            MAX_DIALOGUE_CHARS = 100
-            MAX_CAPTION_CHARS = 120
+            MAX_DIALOGUE_CHARS = 120  # Raised from 80 for better flow
+            MAX_CAPTION_CHARS = 140   # Raised from 100 for better narration
+
+            def clean_dialogue(text: str, max_chars: int) -> str:
+                """Clean punctuation and enforce length limit."""
+                if not text:
+                    return text
+                # Clean up bad punctuation patterns
+                text = re.sub(r'\.\.\.!', '—', text)  # ...! -> em-dash
+                text = re.sub(r'\?\!', '?', text)  # ?! -> ?
+                text = re.sub(r'\!\?', '!', text)  # !? -> !
+                text = re.sub(r'\.\.\.\.+', '...', text)  # Multiple dots -> three
+                text = re.sub(r'!!+', '!', text)  # Multiple ! -> one
+                text = re.sub(r'\?\?+', '?', text)  # Multiple ? -> one
+
+                if len(text) > max_chars:
+                    # Find last word boundary before limit
+                    truncated = text[:max_chars].rsplit(' ', 1)[0]
+                    text = truncated + '...'
+                return text
 
             for panel in result.get('panels', []):
-                # Truncate dialogue if too long
+                # Process single dialogue field
                 dialogue = panel.get('dialogue', '')
                 if dialogue:
-                    # Clean up bad punctuation patterns
-                    dialogue = re.sub(r'\.\.\.!', '—', dialogue)  # ...! -> em-dash
-                    dialogue = re.sub(r'\?\!', '?', dialogue)  # ?! -> ?
-                    dialogue = re.sub(r'\!\?', '!', dialogue)  # !? -> !
-                    dialogue = re.sub(r'\.\.\.\.+', '...', dialogue)  # Multiple dots -> three
-                    dialogue = re.sub(r'!!+', '!', dialogue)  # Multiple ! -> one
-                    dialogue = re.sub(r'\?\?+', '?', dialogue)  # Multiple ? -> one
+                    panel['dialogue'] = clean_dialogue(dialogue, MAX_DIALOGUE_CHARS)
 
-                    if len(dialogue) > MAX_DIALOGUE_CHARS:
-                        # Find last word boundary before limit
-                        truncated = dialogue[:MAX_DIALOGUE_CHARS].rsplit(' ', 1)[0]
-                        dialogue = truncated + '...'
-                    panel['dialogue'] = dialogue
+                # Process dialogue_bubbles array (multiple speakers)
+                bubbles = panel.get('dialogue_bubbles', [])
+                if bubbles:
+                    for bubble in bubbles:
+                        if bubble.get('text'):
+                            bubble['text'] = clean_dialogue(bubble['text'], MAX_DIALOGUE_CHARS)
 
                 # Truncate caption if too long
                 caption = panel.get('caption', '')
-                if caption and len(caption) > MAX_CAPTION_CHARS:
-                    truncated = caption[:MAX_CAPTION_CHARS].rsplit(' ', 1)[0]
-                    panel['caption'] = truncated + '...'
+                if caption:
+                    panel['caption'] = clean_dialogue(caption, MAX_CAPTION_CHARS)
 
             return result
 
+    async def polish_dialogue(
+        self,
+        full_script: list,
+        character_arcs: dict,
+        context_constraints: str = ""
+    ) -> list:
+        """
+        PASS 5.5: DIALOGUE POLISH PASS
+
+        Reads the full generated script and improves dialogue flow:
+        - Fixes abrupt topic changes between pages
+        - Removes repeated phrases/words across panels
+        - Ensures consistent character voice
+        - Smooths transitions between scenes
+
+        This pass processes pages in batches to maintain context while
+        staying within token limits.
+        """
+        if not full_script:
+            return full_script
+
+        print(f"\n💬 PASS 5.5: Polishing dialogue across {len(full_script)} pages...")
+
+        # Build character voice reference for the LLM
+        voice_reference = ""
+        if character_arcs:
+            voices = []
+            for char in character_arcs.get('characters', [])[:8]:  # Top 8 characters
+                name = char.get('name', '')
+                voice = char.get('voice_profile', {})
+                samples = char.get('dialogue_samples', [])
+                if name and (voice or samples):
+                    voice_info = f"  {name}:"
+                    if voice.get('formality'):
+                        voice_info += f" {voice.get('formality')} tone,"
+                    if voice.get('vocabulary_style'):
+                        voice_info += f" {voice.get('vocabulary_style')},"
+                    if voice.get('dialect_markers'):
+                        voice_info += f" uses: {', '.join(voice.get('dialect_markers', [])[:3])}"
+                    if samples:
+                        voice_info += f"\n    Example: \"{samples[0][:80]}...\""
+                    voices.append(voice_info)
+
+            if voices:
+                voice_reference = f"""
+CHARACTER VOICE PROFILES (dialogue must match these):
+{chr(10).join(voices)}
+"""
+
+        # Process in windows of 5 pages (overlapping by 1 for context)
+        WINDOW_SIZE = 5
+        polished_script = []
+
+        for i in range(0, len(full_script), WINDOW_SIZE - 1):
+            window = full_script[i:i + WINDOW_SIZE]
+            window_start = window[0]['page_number']
+            window_end = window[-1]['page_number']
+
+            # Skip if already processed (from overlap)
+            if polished_script and window[0]['page_number'] <= polished_script[-1]['page_number']:
+                window = window[1:]  # Skip first page (already polished)
+                if not window:
+                    continue
+
+            print(f"   📝 Polishing pages {window_start}-{window_end}...")
+
+            # Build dialogue summary for each page in window
+            window_dialogue = []
+            for page in window:
+                page_lines = [f"PAGE {page['page_number']}:"]
+                for panel in page.get('panels', []):
+                    panel_id = panel.get('panel_id', '?')
+                    chars = panel.get('characters', [])
+
+                    # Collect all dialogue from this panel
+                    dialogues = []
+                    if panel.get('dialogue'):
+                        speaker = chars[0] if chars else 'Unknown'
+                        dialogues.append(f'{speaker}: "{panel["dialogue"]}"')
+
+                    for bubble in panel.get('dialogue_bubbles', []):
+                        speaker = bubble.get('speaker', 'Unknown')
+                        text = bubble.get('text', '')
+                        if text:
+                            dialogues.append(f'{speaker}: "{text}"')
+
+                    if panel.get('caption'):
+                        dialogues.append(f'[CAPTION]: "{panel["caption"]}"')
+
+                    if dialogues:
+                        page_lines.append(f"  Panel {panel_id}: {' / '.join(dialogues)}")
+
+                window_dialogue.append('\n'.join(page_lines))
+
+            # Build polish prompt
+            prompt = f"""
+You are a Graphic Novel Dialogue Editor. Your job is to polish dialogue for flow and consistency.
+
+{voice_reference}
+
+CURRENT DIALOGUE (pages {window_start}-{window_end}):
+{chr(10).join(window_dialogue)}
+
+{f'ERA CONSTRAINTS: {context_constraints}' if context_constraints else ''}
+
+IDENTIFY AND FIX:
+1. ABRUPT TOPIC CHANGES: If characters suddenly change topic without transition, add a bridging line or smooth the shift
+2. REPEATED PHRASES: If the same phrase/word appears multiple times across panels, vary it
+3. VOICE INCONSISTENCY: If a character speaks out of character (too formal/informal for their profile), fix it
+4. STILTED DIALOGUE: If dialogue sounds unnatural, make it conversational while preserving meaning
+5. INTERRUPTED FLOW: If a conversation on one page doesn't connect to the next, add continuity
+
+RULES:
+- Keep each dialogue line under 120 characters
+- Keep each caption under 140 characters
+- Preserve the MEANING of each line - only improve the WORDING
+- If dialogue is already good, return it unchanged
+- Maintain consistent character voices throughout
+
+OUTPUT FORMAT: Return a JSON array of objects, one per page:
+[
+  {{
+    "page_number": N,
+    "panels": [
+      {{
+        "panel_id": N,
+        "dialogue": "polished dialogue or null if none",
+        "dialogue_bubbles": [
+          {{"speaker": "Name", "text": "polished text", "position": "top-left"}}
+        ],
+        "caption": "polished caption or null if none",
+        "changes_made": "brief description of changes or 'none'"
+      }}
+    ]
+  }}
+]
+"""
+
+            async with get_scribe_limiter():
+                await get_tpm_limiter().acquire(estimate_tokens_for_text(prompt))
+
+                try:
+                    response = await get_client().aio.models.generate_content(
+                        model=config.scripting_model_page_script,
+                        contents=[prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema={
+                                "type": "ARRAY",
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "page_number": {"type": "INTEGER"},
+                                        "panels": {
+                                            "type": "ARRAY",
+                                            "items": {
+                                                "type": "OBJECT",
+                                                "properties": {
+                                                    "panel_id": {"type": "INTEGER"},
+                                                    "dialogue": {"type": "STRING"},
+                                                    "dialogue_bubbles": {
+                                                        "type": "ARRAY",
+                                                        "items": {
+                                                            "type": "OBJECT",
+                                                            "properties": {
+                                                                "speaker": {"type": "STRING"},
+                                                                "text": {"type": "STRING"},
+                                                                "position": {"type": "STRING"}
+                                                            }
+                                                        }
+                                                    },
+                                                    "caption": {"type": "STRING"},
+                                                    "changes_made": {"type": "STRING"}
+                                                },
+                                                "required": ["panel_id"]
+                                            }
+                                        }
+                                    },
+                                    "required": ["page_number", "panels"]
+                                }
+                            }
+                        )
+                    )
+
+                    polish_result = response.parsed
+
+                    # Merge polished dialogue back into original script
+                    for polished_page in polish_result:
+                        page_num = polished_page['page_number']
+                        # Find original page in window
+                        original = next((p for p in window if p['page_number'] == page_num), None)
+                        if not original:
+                            continue
+
+                        # Track changes for logging
+                        changes_count = 0
+
+                        for polished_panel in polished_page.get('panels', []):
+                            panel_id = polished_panel['panel_id']
+                            # Find original panel
+                            orig_panel = next(
+                                (p for p in original.get('panels', []) if p.get('panel_id') == panel_id),
+                                None
+                            )
+                            if not orig_panel:
+                                continue
+
+                            # Apply polished dialogue if provided
+                            if polished_panel.get('dialogue'):
+                                if orig_panel.get('dialogue') != polished_panel['dialogue']:
+                                    orig_panel['dialogue'] = polished_panel['dialogue']
+                                    changes_count += 1
+
+                            # Apply polished bubbles if provided
+                            if polished_panel.get('dialogue_bubbles'):
+                                orig_panel['dialogue_bubbles'] = polished_panel['dialogue_bubbles']
+                                changes_count += 1
+
+                            # Apply polished caption if provided
+                            if polished_panel.get('caption'):
+                                if orig_panel.get('caption') != polished_panel['caption']:
+                                    orig_panel['caption'] = polished_panel['caption']
+                                    changes_count += 1
+
+                        polished_script.append(original)
+                        if changes_count > 0:
+                            print(f"      Page {page_num}: {changes_count} dialogue improvements")
+
+                except Exception as e:
+                    print(f"   ⚠️  Polish failed for pages {window_start}-{window_end}: {e}")
+                    # On failure, keep original dialogue
+                    for page in window:
+                        if not polished_script or page['page_number'] > polished_script[-1]['page_number']:
+                            polished_script.append(page)
+
+        # Ensure all pages are included (in case of edge cases)
+        polished_page_nums = {p['page_number'] for p in polished_script}
+        for page in full_script:
+            if page['page_number'] not in polished_page_nums:
+                polished_script.append(page)
+
+        polished_script.sort(key=lambda x: x['page_number'])
+        print(f"   ✅ Dialogue polish complete")
+
+        return polished_script
+
     async def generate_script(self, style: str, test_mode=True, context_constraints: str = "", target_page_override: int = None):
         """
-        Main orchestration method - 7-pass enrichment pipeline:
+        Main orchestration method - 8-pass enrichment pipeline:
 
         PASS 0: Global Context (provided via context_constraints)
-        PASS 1: Beat Analysis - Extract narrative beats, intensity, act structure
-        PASS 2: Director Pass - Blueprint with beat-based page allocation
-        PASS 3: Character Deep Dive - Arcs, relationships, scene-specific gear
-        PASS 4: Asset Manifest - Characters, objects, interaction rules
-        PASS 5: Scriptwriter Pass - Panel scripts with structured advice
+        PASS 1: Beat Analysis - Extract narrative beats with visual potential scores
+        PASS 1.5: Adaptation Filter - Identify essential/condensable/cuttable content
+        PASS 2: Director Pass - Blueprint with spread awareness + cliffhangers
+        PASS 3: Character Deep Dive - Arcs, voice profiles, scene-specific gear
+        PASS 4: Asset Manifest - Characters, objects, locations, interaction rules
+        PASS 5: Scriptwriter Pass - Hybrid sequential/parallel generation
+              - Sequential for dialogue-heavy scenes (preserves conversation flow)
+              - Parallel for action/establishing scenes (faster)
+              - Supports multiple dialogue bubbles per panel
+        PASS 5.5: Dialogue Polish - Cross-page dialogue flow improvements
         PASS 6: Validation + Auto-Fix - Validate and fix common issues
         """
         from validators import validate_and_autofix_script, ValidationReport
@@ -1692,45 +2003,111 @@ class ScriptingAgent:
             json.dump(asset_manifest, f, indent=2)
         print(f"✅ Asset manifest created: {manifest_path}")
 
-        # ========== PASS 5: Scriptwriter Pass (Parallel) ==========
+        # ========== PASS 5: Scriptwriter Pass (Hybrid Sequential/Parallel) ==========
         print(f"\n⚡ PASS 5: Generating panel scripts for {len(blueprint)} pages...")
         print(f"   Using voice profiles from {len(character_arcs.get('characters', []))} characters")
-        print(f"   Passing adjacent page context for scene continuity")
 
-        # Build tasks with adjacent page context for continuity
-        tasks = []
+        # Identify dialogue-heavy sequences that need sequential generation
+        # A "dialogue sequence" is 2+ consecutive dialogue/formal pages
+        DIALOGUE_SCENE_TYPES = {'dialogue', 'formal', 'flashback'}
+
+        dialogue_sequences = []  # List of (start_idx, end_idx) for sequential generation
+        current_seq_start = None
+
         for i, item in enumerate(blueprint):
-            prev_page = blueprint[i - 1] if i > 0 else None
-            next_page = blueprint[i + 1] if i < len(blueprint) - 1 else None
-            tasks.append(
-                self.write_page_script(
-                    item,
-                    style,
-                    context_constraints,
-                    character_arcs,
-                    asset_manifest,
-                    prev_page,
-                    next_page
-                )
-            )
+            scene_type = item.get('scene_type', 'dialogue')
+            is_dialogue = scene_type in DIALOGUE_SCENE_TYPES
 
-        # Execute all pages at once (bounded by get_scribe_limiter())
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Separate successful scripts from failures
-        full_script = []
-        failed_pages = []
-        failed_blueprints = {}  # Map page_num to (blueprint_item, index) for retry
-        page_num_to_index = {item.get('page_number', i + 1): i for i, item in enumerate(blueprint)}
-
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                page_num = blueprint[i].get('page_number', i + 1)
-                print(f"   ❌ Page {page_num} script failed: {result}")
-                failed_pages.append(page_num)
-                failed_blueprints[page_num] = (blueprint[i], i)
+            if is_dialogue:
+                if current_seq_start is None:
+                    current_seq_start = i
             else:
-                full_script.append(result)
+                if current_seq_start is not None and i - current_seq_start >= 2:
+                    # End of a dialogue sequence (2+ pages)
+                    dialogue_sequences.append((current_seq_start, i - 1))
+                current_seq_start = None
+
+        # Don't forget the last sequence if it ends at the last page
+        if current_seq_start is not None and len(blueprint) - current_seq_start >= 2:
+            dialogue_sequences.append((current_seq_start, len(blueprint) - 1))
+
+        # Track which pages are in dialogue sequences
+        sequential_pages = set()
+        for start, end in dialogue_sequences:
+            for i in range(start, end + 1):
+                sequential_pages.add(i)
+
+        parallel_count = len(blueprint) - len(sequential_pages)
+        seq_count = len(sequential_pages)
+        print(f"   📝 Sequential generation: {seq_count} pages in {len(dialogue_sequences)} dialogue sequence(s)")
+        print(f"   ⚡ Parallel generation: {parallel_count} action/establishing pages")
+
+        # Generate all pages, using sequential for dialogue sequences
+        full_script = []
+        generated_scripts = {}  # idx -> script for lookups
+
+        # PHASE 1: Generate dialogue sequences SEQUENTIALLY
+        for seq_start, seq_end in dialogue_sequences:
+            print(f"   🗣️  Generating dialogue sequence pages {seq_start + 1}-{seq_end + 1} sequentially...")
+            prev_script = generated_scripts.get(seq_start - 1)  # Previous page if exists
+
+            for i in range(seq_start, seq_end + 1):
+                item = blueprint[i]
+                prev_page = blueprint[i - 1] if i > 0 else None
+                next_page = blueprint[i + 1] if i < len(blueprint) - 1 else None
+
+                try:
+                    script = await self.write_page_script(
+                        item, style, context_constraints, character_arcs, asset_manifest,
+                        prev_page, next_page, prev_script
+                    )
+                    full_script.append(script)
+                    generated_scripts[i] = script
+                    prev_script = script  # Pass to next page in sequence
+                    print(f"      ✅ Page {item.get('page_number')} complete")
+                except Exception as e:
+                    print(f"      ❌ Page {item.get('page_number')} failed: {e}")
+                    # Will be handled in retry logic
+
+        # PHASE 2: Generate remaining pages IN PARALLEL
+        parallel_tasks = []
+        parallel_indices = []
+
+        for i, item in enumerate(blueprint):
+            if i not in sequential_pages:
+                prev_page = blueprint[i - 1] if i > 0 else None
+                next_page = blueprint[i + 1] if i < len(blueprint) - 1 else None
+                # For parallel pages, use any adjacent generated script if available
+                prev_script = generated_scripts.get(i - 1)
+
+                parallel_tasks.append(
+                    self.write_page_script(
+                        item, style, context_constraints, character_arcs, asset_manifest,
+                        prev_page, next_page, prev_script
+                    )
+                )
+                parallel_indices.append(i)
+
+        if parallel_tasks:
+            print(f"   ⚡ Generating {len(parallel_tasks)} parallel pages...")
+            results = await asyncio.gather(*parallel_tasks, return_exceptions=True)
+
+            for idx, result in zip(parallel_indices, results):
+                if isinstance(result, Exception):
+                    print(f"   ❌ Page {blueprint[idx].get('page_number')} failed: {result}")
+                else:
+                    full_script.append(result)
+                    generated_scripts[idx] = result
+
+        # Identify failed pages for retry
+        failed_pages = []
+        failed_blueprints = {}
+
+        for i, item in enumerate(blueprint):
+            if i not in generated_scripts:
+                page_num = item.get('page_number', i + 1)
+                failed_pages.append(page_num)
+                failed_blueprints[page_num] = (item, i)
 
         # RETRY LOGIC: Attempt to regenerate failed pages (up to 2 retries)
         MAX_RETRIES = 2
@@ -1746,15 +2123,11 @@ class ScriptingAgent:
                 item, idx = failed_blueprints[page_num]
                 prev_page = blueprint[idx - 1] if idx > 0 else None
                 next_page = blueprint[idx + 1] if idx < len(blueprint) - 1 else None
+                prev_script = generated_scripts.get(idx - 1)
                 retry_tasks.append(
                     self.write_page_script(
-                        item,
-                        style,
-                        context_constraints,
-                        character_arcs,
-                        asset_manifest,
-                        prev_page,
-                        next_page
+                        item, style, context_constraints, character_arcs, asset_manifest,
+                        prev_page, next_page, prev_script
                     )
                 )
 
@@ -1765,12 +2138,14 @@ class ScriptingAgent:
             still_failed = []
             for i, result in enumerate(retry_results):
                 page_num = failed_pages[i]
+                item, idx = failed_blueprints[page_num]
                 if isinstance(result, Exception):
                     print(f"   ❌ Page {page_num} retry {retry_count} failed: {result}")
                     still_failed.append(page_num)
                 else:
                     print(f"   ✅ Page {page_num} succeeded on retry {retry_count}")
                     full_script.append(result)
+                    generated_scripts[idx] = result
 
             failed_pages = still_failed
 
@@ -1780,6 +2155,13 @@ class ScriptingAgent:
 
         # Sort by page number
         full_script.sort(key=lambda x: x['page_number'])
+
+        # ========== PASS 5.5: Dialogue Polish Pass ==========
+        full_script = await self.polish_dialogue(
+            full_script,
+            character_arcs,
+            context_constraints
+        )
 
         # ========== PASS 6: Validation + Auto-Fix ==========
         print("\n🔍 PASS 6: Validating and auto-fixing script...")
