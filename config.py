@@ -107,26 +107,29 @@ class PipelineConfig:
 
     # ==================== Model Selection ====================
     # Text/Logic Models (Pipeline Pass Models)
-    scripting_model_global_context: str = "gemini-2.5-flash"  # Pass 1: Beat Analysis, Pass 2: Director
-    scripting_model_chapter_map: str = "gemini-2.5-flash"      # Legacy
-    scripting_model_page_script: str = "gemini-2.5-flash"      # Pass 5: Scriptwriter
-    layout_model: str = "gemini-2.5-flash"                     # Compositor
+    # gemini-3-pro-preview: Best reasoning (1M context, 65K output)
+    # gemini-3-flash-preview: Fast + good reasoning (1M context, 65K output)
+    scripting_model_global_context: str = "gemini-3-pro-preview"   # Pass 0-2: Complex analysis
+    scripting_model_chapter_map: str = "gemini-3-flash-preview"    # Legacy
+    scripting_model_page_script: str = "gemini-3-flash-preview"    # Pass 5: Scriptwriter (parallel)
+    layout_model: str = "gemini-3-flash-preview"                   # Compositor
 
     # Additional Pass Models (can be tuned separately)
-    adaptation_filter_model: str = "gemini-2.5-flash"          # Pass 1.5: Adaptation Filter
-    character_deep_dive_model: str = "gemini-2.5-flash"        # Pass 3: Character Deep Dive
-    asset_manifest_model: str = "gemini-2.5-flash"             # Pass 4: Asset Manifest
-    validation_model: str = "gemini-2.5-flash"                 # Pass 6: Validation
+    adaptation_filter_model: str = "gemini-3-pro-preview"          # Pass 1.5: Adaptation Filter
+    character_deep_dive_model: str = "gemini-3-pro-preview"        # Pass 3: Character Deep Dive
+    asset_manifest_model: str = "gemini-3-pro-preview"             # Pass 4: Asset Manifest
+    validation_model: str = "gemini-3-flash-preview"               # Pass 6: Validation
 
     # Image Models (priority order for fallback)
-    # Using stable Gemini 3 models for production reliability
-    image_model_primary: str = "gemini-3-pro-image"       # Stable, high-fidelity, up to 14 reference inputs
-    image_model_fallback: str = "gemini-3-flash"          # Stable, fast, good quality
-    image_model_last_resort: str = "gemini-2.5-flash-image"  # Legacy fallback
+    # Gemini 3 Pro Image: 14 input images max, 32K output tokens, highest quality
+    # Gemini 2.5 Flash Image: 3 input images max, GA fallback
+    image_model_primary: str = "gemini-3-pro-image-preview"   # Best quality, 14 ref images
+    image_model_fallback: str = "gemini-2.5-flash-image"      # GA fallback, 3 ref images max
+    image_model_last_resort: str = "gemini-2.5-flash-image"   # Same as fallback
 
     # Character Design Models
-    character_model_attributes: str = "gemini-3-flash"        # Stable for text/attributes
-    character_model_image: str = "gemini-3-pro-image"         # Stable for reference sheets
+    character_model_attributes: str = "gemini-3-flash-preview"  # Fast text/attributes
+    character_model_image: str = "gemini-3-pro-image-preview"   # Best quality for refs
 
     # ==================== Rate Limiting ====================
     # Requests per minute (RPM) - these are defaults, adjusted by get_effective_rate_limits()
@@ -228,7 +231,7 @@ class PipelineConfig:
     # ==================== Image Composition Analysis ====================
     # LLM-based analysis of generated panels for smart cropping and bubble placement
     enable_image_composition_analysis: bool = True
-    composition_analysis_model: str = "gemini-2.5-flash"
+    composition_analysis_model: str = "gemini-3-flash-preview"
     composition_analysis_confidence_threshold: float = 0.7  # Min confidence to override script bubble position
     reuse_existing_analysis: bool = True  # Reuse sidecar JSON on resume runs
 
