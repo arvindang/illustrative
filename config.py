@@ -12,6 +12,51 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# ============================================================================
+# SERVICE ACCOUNT KEY HANDLING (for Railway/production deployments)
+# ============================================================================
+# If GOOGLE_SERVICE_ACCOUNT_KEY env var contains JSON credentials,
+# write them to a temp file and set GOOGLE_APPLICATION_CREDENTIALS.
+# This allows Railway deployments to authenticate with Vertex AI.
+
+def _setup_service_account_credentials():
+    """
+    Set up Google Application Default Credentials from env var if present.
+    This is called at module load time to ensure credentials are available
+    before any Google API clients are initialized.
+    """
+    import tempfile
+    import atexit
+
+    key_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+    if key_json and not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        try:
+            # Validate it's actually JSON
+            import json
+            json.loads(key_json)
+
+            # Write to a temp file
+            fd, path = tempfile.mkstemp(suffix='.json', prefix='gcp_credentials_')
+            with os.fdopen(fd, 'w') as f:
+                f.write(key_json)
+
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+
+            # Clean up on exit
+            def cleanup():
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            atexit.register(cleanup)
+
+        except json.JSONDecodeError:
+            print("Warning: GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON")
+
+
+_setup_service_account_credentials()
+
+
 @dataclass
 class PipelineConfig:
     """
