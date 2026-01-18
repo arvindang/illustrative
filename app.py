@@ -12,35 +12,6 @@ from storage.bucket import BucketStorage
 # Page Configuration
 st.set_page_config(page_title="Illustrative AI", page_icon="📚", layout="centered")
 
-# Google Analytics - inject into parent document head
-import streamlit.components.v1 as components
-components.html(
-    """
-    <script>
-        // Inject GA into parent document head (Streamlit renders in iframe)
-        const GA_ID = 'G-Q36Y0K4RP3';
-        const doc = window.parent.document;
-
-        if (!doc.querySelector('script[src*="googletagmanager"]')) {
-            const gtagScript = doc.createElement('script');
-            gtagScript.async = true;
-            gtagScript.src = 'https://www.googletagmanager.com/gtag/js?id=' + GA_ID;
-            doc.head.appendChild(gtagScript);
-
-            const inlineScript = doc.createElement('script');
-            inlineScript.textContent = `
-                window.dataLayer = window.dataLayer || [];
-                function gtag(){dataLayer.push(arguments);}
-                gtag('js', new Date());
-                gtag('config', '${GA_ID}');
-            `;
-            doc.head.appendChild(inlineScript);
-        }
-    </script>
-    """,
-    height=0,
-)
-
 # Hide Streamlit's hamburger menu
 st.markdown("""
     <style>

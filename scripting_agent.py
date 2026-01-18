@@ -1251,12 +1251,33 @@ class ScriptingAgent:
         return full_blueprint
 
     @retry_with_backoff()
-    async def write_page_script(self, blueprint_item: dict, style: str, context_constraints: str = "", character_arcs: dict = None, assets: dict = None):
+    async def write_page_script(
+        self,
+        blueprint_item: dict,
+        style: str,
+        context_constraints: str = "",
+        character_arcs: dict = None,
+        assets: dict = None,
+        prev_page: dict = None,
+        next_page: dict = None
+    ):
         """
         PASS 5: THE SCRIPTWRITER (Enhanced)
         Generates the detailed panel script for a SINGLE page, strictly following the blueprint.
-        Uses character_arcs for scene-specific gear and emotional states.
-        Uses assets for interaction_rules.
+
+        Enhanced features:
+        - Uses character_arcs for scene-specific gear, emotional states, AND voice profiles
+        - Uses assets for interaction_rules and location context
+        - Uses prev_page/next_page for scene continuity across page boundaries
+
+        Args:
+            blueprint_item: Blueprint data for this page
+            style: Art style
+            context_constraints: Era/setting constraints
+            character_arcs: Character arc data with voice profiles
+            assets: Asset manifest with locations and interaction rules
+            prev_page: Blueprint of previous page (for continuity)
+            next_page: Blueprint of next page (for setup/payoff)
         """
         page_num = blueprint_item['page_number']
         focus_text = blueprint_item.get('focus_text', "")
@@ -1336,6 +1357,57 @@ class ScriptingAgent:
             """
                     break
 
+        # Build voice profiles for characters on this page (for dialogue consistency)
+        voice_context = ""
+        page_characters = blueprint_item.get('key_characters', [])
+        if character_arcs and page_characters:
+            char_voices = []
+            for char in character_arcs.get('characters', []):
+                char_name = char.get('name', '')
+                if char_name in page_characters:
+                    voice = char.get('voice_profile', {})
+                    samples = char.get('dialogue_samples', [])
+                    if voice or samples:
+                        voice_info = f"  {char_name}:"
+                        if voice.get('formality'):
+                            voice_info += f" {voice.get('formality')} speech,"
+                        if voice.get('vocabulary_style'):
+                            voice_info += f" {voice.get('vocabulary_style')},"
+                        if voice.get('dialect_markers'):
+                            voice_info += f" markers: {', '.join(voice.get('dialect_markers', [])[:2])}"
+                        if samples:
+                            voice_info += f"\n    Example: \"{samples[0][:60]}...\""
+                        char_voices.append(voice_info)
+
+            if char_voices:
+                voice_context = f"""
+            CHARACTER VOICE PROFILES (write dialogue to match these styles):
+{chr(10).join(char_voices)}
+            """
+
+        # Build adjacent page context for scene continuity
+        continuity_context = ""
+        if prev_page or next_page:
+            continuity_parts = []
+            if prev_page:
+                prev_chars = ', '.join(prev_page.get('key_characters', []))
+                prev_scene = prev_page.get('scene_type', 'dialogue')
+                continuity_parts.append(f"PREVIOUS PAGE ({prev_page.get('page_number')}): {prev_page.get('summary', '')} (Characters: {prev_chars}, Scene: {prev_scene})")
+            if next_page:
+                next_chars = ', '.join(next_page.get('key_characters', []))
+                next_scene = next_page.get('scene_type', 'dialogue')
+                continuity_parts.append(f"NEXT PAGE ({next_page.get('page_number')}): {next_page.get('summary', '')} (Characters: {next_chars}, Scene: {next_scene})")
+
+            if continuity_parts:
+                continuity_context = f"""
+            SCENE CONTINUITY (ensure smooth transitions):
+            {chr(10).join(continuity_parts)}
+
+            - If characters appear on previous page, they should enter/continue naturally
+            - If setting changes, show the transition (travel, doorway, cut)
+            - Set up any reveals/events that happen on the next page
+            """
+
         async with get_scribe_limiter():
             print(f"✍️  Scripting Page {page_num} ({scene_type}, {suggested_panel_count} panels)...")
 
@@ -1348,6 +1420,8 @@ class ScriptingAgent:
             {scene_context}
             {interaction_context}
             {location_context}
+            {voice_context}
+            {continuity_context}
             BLUEPRINT FOR THIS PAGE:
             Summary: {blueprint_item['summary']}
             Mood: {blueprint_item['mood']}
@@ -1620,11 +1694,25 @@ class ScriptingAgent:
 
         # ========== PASS 5: Scriptwriter Pass (Parallel) ==========
         print(f"\n⚡ PASS 5: Generating panel scripts for {len(blueprint)} pages...")
+        print(f"   Using voice profiles from {len(character_arcs.get('characters', []))} characters")
+        print(f"   Passing adjacent page context for scene continuity")
 
-        tasks = [
-            self.write_page_script(item, style, context_constraints, character_arcs, asset_manifest)
-            for item in blueprint
-        ]
+        # Build tasks with adjacent page context for continuity
+        tasks = []
+        for i, item in enumerate(blueprint):
+            prev_page = blueprint[i - 1] if i > 0 else None
+            next_page = blueprint[i + 1] if i < len(blueprint) - 1 else None
+            tasks.append(
+                self.write_page_script(
+                    item,
+                    style,
+                    context_constraints,
+                    character_arcs,
+                    asset_manifest,
+                    prev_page,
+                    next_page
+                )
+            )
 
         # Execute all pages at once (bounded by get_scribe_limiter())
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1632,14 +1720,15 @@ class ScriptingAgent:
         # Separate successful scripts from failures
         full_script = []
         failed_pages = []
-        failed_blueprints = {}  # Map page_num to blueprint item for retry
+        failed_blueprints = {}  # Map page_num to (blueprint_item, index) for retry
+        page_num_to_index = {item.get('page_number', i + 1): i for i, item in enumerate(blueprint)}
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 page_num = blueprint[i].get('page_number', i + 1)
                 print(f"   ❌ Page {page_num} script failed: {result}")
                 failed_pages.append(page_num)
-                failed_blueprints[page_num] = blueprint[i]
+                failed_blueprints[page_num] = (blueprint[i], i)
             else:
                 full_script.append(result)
 
@@ -1651,19 +1740,25 @@ class ScriptingAgent:
             retry_count += 1
             print(f"\n🔄 Retry attempt {retry_count}/{MAX_RETRIES} for {len(failed_pages)} failed page(s)...")
 
-            # Create retry tasks for failed pages
-            retry_tasks = [
-                self.write_page_script(
-                    failed_blueprints[page_num],
-                    style,
-                    context_constraints,
-                    character_arcs,
-                    asset_manifest
+            # Create retry tasks for failed pages (with adjacent page context)
+            retry_tasks = []
+            for page_num in failed_pages:
+                item, idx = failed_blueprints[page_num]
+                prev_page = blueprint[idx - 1] if idx > 0 else None
+                next_page = blueprint[idx + 1] if idx < len(blueprint) - 1 else None
+                retry_tasks.append(
+                    self.write_page_script(
+                        item,
+                        style,
+                        context_constraints,
+                        character_arcs,
+                        asset_manifest,
+                        prev_page,
+                        next_page
+                    )
                 )
-                for page_num in failed_pages
-            ]
 
-            # Execute retry tasks with a small delay between each
+            # Execute retry tasks
             retry_results = await asyncio.gather(*retry_tasks, return_exceptions=True)
 
             # Process retry results

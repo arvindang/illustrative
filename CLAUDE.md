@@ -17,12 +17,51 @@ ScriptingAgent → IllustratorAgent → CompositorAgent
 ```
 
 ### 1. ScriptingAgent (`scripting_agent.py`)
-Uses Gemini Context Caching to load the full book, then runs a multi-pass process:
-- **Pass 1 - Director**: Creates a page-by-page blueprint with summaries, mood, and focus text
-- **Pass 1.5 - Asset Manifest**: Extracts characters and key objects with visual descriptions
-- **Pass 2 - Scriptwriter**: Generates detailed panel scripts in parallel, referencing the cached book
+Uses Gemini Context Caching to load the full book (2M context window), then runs a **7-pass enrichment pipeline**:
 
-Output: `_full_script.json` + `_assets.json`
+```
+PASS 0: Global Context (user-provided era constraints)
+PASS 1: Beat Analysis → _beats.json
+        - Narrative beats with intensity + visual_potential scores
+        - Page-turn hooks and cliffhanger identification
+        - Micro-beats for panel-level pacing
+PASS 1.5: Adaptation Filter → _adaptation.json
+        - Essential/condensable/cuttable scene classification
+        - Reader-beloved moments (must-keep fan favorites)
+        - Pacing recommendations (slow_down/speed_up beats)
+PASS 2: Director Pass → _blueprint.json
+        - Page-by-page blueprint with spread awareness (two-page spreads)
+        - Cliffhanger marking (odd pages for page-turn suspense)
+        - suggested_panel_count and recommended_splash flags
+PASS 3: Character Deep Dive → _character_arcs.json
+        - Arc typing (transformation, flat, redemption, etc.)
+        - Voice profiles with dialect markers, catchphrases, dialogue samples
+        - Scene-specific gear and emotional states
+PASS 4: Asset Manifest → _assets.json
+        - Characters with color_signature for visual identity
+        - Recurring locations with lighting, mood, color_palette
+        - Global color_script for act-based color direction
+        - Interaction rules per scene type
+PASS 5: Scriptwriter (Parallel) → _full_script.json
+        - Cinematic shot_type (establishing, close-up, over-shoulder, etc.)
+        - panel_size (large/medium/small) for pacing control
+        - Adjacent page context for scene continuity
+        - Voice profile integration for dialogue consistency
+        - Retry logic for failed pages (up to 2 retries)
+PASS 6: Validation + Auto-Fix → _validation.json
+        - Pre-validation via PromptPreValidator (saves tokens)
+        - Era anachronism detection and replacement
+        - Dialogue/caption length enforcement
+```
+
+**Key Handoffs Between Passes:**
+- Beat analysis → Director: visual_potential scores inform page allocation
+- Adaptation filter → Director: essential/condensable guidance
+- Character arcs → Scriptwriter: voice profiles ensure dialogue consistency
+- Blueprint → Scriptwriter: adjacent page context (prev/next) for continuity
+- Chunk handoff in Director: last 8 pages with full detail (characters, mood, scene type)
+
+Output: `_full_script.json` + `_assets.json` + `_beats.json` + `_character_arcs.json` + `_adaptation.json` + `_validation.json`
 
 ### 2. IllustratorAgent (`illustrator_agent.py`)
 Handles all image generation:
@@ -158,7 +197,18 @@ await illustrator.generate_all_references(style="Botanical Illustration")
         "visual_description": "...",
         "characters": ["Captain Nemo", "Professor Aronnax"],
         "dialogue": "...",
-        "bubble_position": "top-left"
+        "caption": "...",
+        "bubble_position": "top-left",
+        "shot_type": "medium",  // establishing, wide, medium, close-up, extreme-close-up, over-shoulder, two-shot, birds-eye, worms-eye
+        "panel_size": "medium", // large (50%+), medium (25-50%), small (15-25%)
+        "key_objects": ["The Nautilus", "Harpoon"],
+        "advice": {
+          "scene_type": "dialogue",
+          "required_gear": {"Captain Nemo": ["naval uniform"]},
+          "era_constraints": ["Victorian clothing"],
+          "continuity": {"from_previous": "...", "to_next": "..."},
+          "composition": {"negative_space": "top-left"}
+        }
       }
     ]
   }

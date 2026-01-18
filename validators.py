@@ -2,13 +2,16 @@
 Validators module: Quality control for the graphic novel pipeline.
 
 Includes:
+- PromptPreValidator: PRE-generation validation to avoid wasting tokens
 - ContinuityValidator: Pre-illustration script validation (character states, impossible scenarios)
 - PanelValidator: Post-generation image validation (era accuracy, character presence)
 - ConsistencyAuditor: Cross-panel character consistency checking
+- ScriptValidator: Post-generation script validation with auto-fixes
 """
 
 import json
 import io
+import re
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 from PIL import Image
@@ -17,6 +20,286 @@ from dataclasses import dataclass, field
 from google import genai
 from google.genai import types
 from config import config
+
+
+# ==============================================================================
+# PROMPT PRE-VALIDATOR - Validate inputs BEFORE expensive LLM calls
+# ==============================================================================
+
+@dataclass
+class PreValidationResult:
+    """Result of pre-validating inputs before LLM call."""
+    valid: bool
+    issues: List[str] = field(default_factory=list)
+    suggestions: List[str] = field(default_factory=list)
+    auto_fixed: Dict[str, str] = field(default_factory=dict)  # field -> fixed_value
+
+
+class PromptPreValidator:
+    """
+    Validates and pre-processes inputs BEFORE sending to the LLM.
+
+    This saves tokens by catching issues early:
+    - Dialogue/caption length will be enforced BEFORE generation
+    - Visual descriptions will be validated for required elements
+    - Era constraints will be pre-checked against known terms
+    - Character references will be validated against known characters
+
+    Usage:
+        validator = PromptPreValidator(era="1860s Victorian", known_characters=["Captain Nemo"])
+        result = validator.validate_panel_inputs(visual_desc, dialogue, characters)
+        if not result.valid:
+            # Handle issues before LLM call
+    """
+
+    MAX_DIALOGUE_CHARS = 80
+    MAX_CAPTION_CHARS = 100
+
+    # Era-specific forbidden terms (modern words that shouldn't appear)
+    ERA_FORBIDDEN_TERMS = {
+        "1860s": ["phone", "computer", "internet", "email", "television", "tv", "radio",
+                  "airplane", "automobile", "car", "electricity", "plastic", "laser",
+                  "robot", "android", "helicopter", "neon", "satellite"],
+        "medieval": ["gun", "rifle", "pistol", "electricity", "engine", "motor",
+                     "phone", "radio", "plastic", "computer", "glass window",
+                     "printing press", "clock", "potato", "tomato", "corn"],
+        "ancient_rome": ["stirrup", "paper", "glass window", "gun", "engine",
+                         "electricity", "plastic", "printing", "compass"],
+    }
+
+    # Scene type requirements (what MUST be mentioned)
+    SCENE_REQUIREMENTS = {
+        "underwater": ["diving", "helmet", "suit", "breathing", "water", "submarine"],
+        "formal": ["attire", "dress", "suit", "gown", "evening", "coat"],
+        "action": ["motion", "movement", "running", "fighting", "chase"],
+    }
+
+    def __init__(
+        self,
+        era: str = "",
+        known_characters: List[str] = None,
+        known_locations: List[str] = None,
+        interaction_rules: Dict[str, List[str]] = None
+    ):
+        self.era = era.lower()
+        self.known_characters = set(known_characters or [])
+        self.known_locations = set(known_locations or [])
+        self.interaction_rules = interaction_rules or {}
+
+        # Determine which era's forbidden terms apply
+        self.forbidden_terms = []
+        for era_key, terms in self.ERA_FORBIDDEN_TERMS.items():
+            if era_key in self.era:
+                self.forbidden_terms.extend(terms)
+
+    def validate_panel_inputs(
+        self,
+        visual_description: str,
+        dialogue: str = "",
+        caption: str = "",
+        characters: List[str] = None,
+        scene_type: str = ""
+    ) -> PreValidationResult:
+        """
+        Validate all inputs for a single panel BEFORE LLM generation.
+
+        Args:
+            visual_description: The visual description to validate
+            dialogue: Proposed dialogue text
+            caption: Proposed caption/narration text
+            characters: List of character names in the panel
+            scene_type: Type of scene for requirement checking
+
+        Returns:
+            PreValidationResult with validation status and any auto-fixes
+        """
+        issues = []
+        suggestions = []
+        auto_fixed = {}
+
+        # 1. Validate dialogue length
+        if dialogue and len(dialogue) > self.MAX_DIALOGUE_CHARS:
+            # Auto-fix by truncating
+            fixed = self._truncate_at_word_boundary(dialogue, self.MAX_DIALOGUE_CHARS)
+            auto_fixed["dialogue"] = fixed
+            issues.append(f"Dialogue too long ({len(dialogue)} chars > {self.MAX_DIALOGUE_CHARS}). Auto-truncated.")
+
+        # 2. Validate caption length
+        if caption and len(caption) > self.MAX_CAPTION_CHARS:
+            fixed = self._truncate_at_word_boundary(caption, self.MAX_CAPTION_CHARS)
+            auto_fixed["caption"] = fixed
+            issues.append(f"Caption too long ({len(caption)} chars > {self.MAX_CAPTION_CHARS}). Auto-truncated.")
+
+        # 3. Check for era anachronisms in visual description
+        anachronisms = self._find_anachronisms(visual_description)
+        if anachronisms:
+            issues.append(f"Era anachronisms detected: {', '.join(anachronisms)}")
+            suggestions.append("Remove or replace modern terms with era-appropriate alternatives")
+
+        # 4. Check for era anachronisms in dialogue
+        dialogue_anachronisms = self._find_anachronisms(dialogue)
+        if dialogue_anachronisms:
+            issues.append(f"Dialogue anachronisms: {', '.join(dialogue_anachronisms)}")
+
+        # 5. Validate scene type requirements
+        if scene_type and scene_type.lower() in self.SCENE_REQUIREMENTS:
+            required = self.SCENE_REQUIREMENTS[scene_type.lower()]
+            desc_lower = visual_description.lower()
+            missing = [r for r in required if not any(r in desc_lower for r in required[:3])]
+            if len(missing) == len(required):  # None of the required terms present
+                suggestions.append(f"Scene type '{scene_type}' typically includes: {', '.join(required[:3])}")
+
+        # 6. Validate character references
+        if characters:
+            unknown = [c for c in characters if c not in self.known_characters and self.known_characters]
+            if unknown:
+                suggestions.append(f"Unknown characters referenced: {', '.join(unknown)}")
+
+        # 7. Check interaction rules for this scene type
+        if scene_type and self.interaction_rules:
+            scene_rules = self.interaction_rules.get(f"{scene_type}_scenes", [])
+            if scene_rules:
+                # Check if any rule keywords are missing from description
+                for rule in scene_rules[:2]:  # Check first 2 rules
+                    rule_keywords = rule.lower().split()[:3]  # First 3 words
+                    if not any(kw in visual_description.lower() for kw in rule_keywords):
+                        suggestions.append(f"Scene rule may apply: {rule}")
+
+        return PreValidationResult(
+            valid=len(issues) == 0,
+            issues=issues,
+            suggestions=suggestions,
+            auto_fixed=auto_fixed
+        )
+
+    def validate_blueprint_page(
+        self,
+        page_number: int,
+        summary: str,
+        focus_text: str,
+        key_characters: List[str] = None,
+        scene_type: str = ""
+    ) -> PreValidationResult:
+        """
+        Validate blueprint page inputs before LLM expansion.
+        """
+        issues = []
+        suggestions = []
+        auto_fixed = {}
+
+        # 1. Check focus_text isn't too long (should be visual moments, not excerpts)
+        if len(focus_text) > 500:
+            suggestions.append("Focus text is very long - consider extracting only key visual moments")
+
+        # 2. Check for missing key elements
+        if not key_characters:
+            suggestions.append(f"Page {page_number} has no key_characters defined")
+
+        # 3. Check for era anachronisms in summary
+        anachronisms = self._find_anachronisms(summary)
+        if anachronisms:
+            issues.append(f"Summary contains anachronisms: {', '.join(anachronisms)}")
+
+        return PreValidationResult(
+            valid=len(issues) == 0,
+            issues=issues,
+            suggestions=suggestions,
+            auto_fixed=auto_fixed
+        )
+
+    def _truncate_at_word_boundary(self, text: str, max_length: int) -> str:
+        """Truncate text at a word boundary with ellipsis."""
+        if len(text) <= max_length:
+            return text
+        truncated = text[:max_length - 3]
+        last_space = truncated.rfind(' ')
+        if last_space > max_length // 2:
+            truncated = truncated[:last_space]
+        return truncated + "..."
+
+    def _find_anachronisms(self, text: str) -> List[str]:
+        """Find era-inappropriate terms in text."""
+        if not text or not self.forbidden_terms:
+            return []
+        text_lower = text.lower()
+        found = []
+        for term in self.forbidden_terms:
+            if re.search(r'\b' + re.escape(term) + r'\b', text_lower):
+                found.append(term)
+        return found
+
+    def preprocess_dialogue(self, dialogue: str) -> str:
+        """
+        Clean and fix common dialogue issues before LLM processing.
+        Returns cleaned dialogue.
+        """
+        if not dialogue:
+            return dialogue
+
+        # Fix punctuation issues
+        cleaned = dialogue
+        cleaned = re.sub(r'\.\.\.!', '—', cleaned)  # ...! -> em-dash
+        cleaned = re.sub(r'\?\!', '?', cleaned)  # ?! -> ?
+        cleaned = re.sub(r'\!\?', '!', cleaned)  # !? -> !
+        cleaned = re.sub(r'\.\.\.\.+', '...', cleaned)  # Multiple dots -> three
+        cleaned = re.sub(r'!!+', '!', cleaned)  # Multiple ! -> one
+        cleaned = re.sub(r'\?\?+', '?', cleaned)  # Multiple ? -> one
+
+        # Remove stage directions
+        cleaned = re.sub(r'\([^)]*\)', '', cleaned)  # Remove (parentheticals)
+        cleaned = re.sub(r'\[[^\]]*\]', '', cleaned)  # Remove [brackets]
+
+        # Trim and length-check
+        cleaned = cleaned.strip()
+        if len(cleaned) > self.MAX_DIALOGUE_CHARS:
+            cleaned = self._truncate_at_word_boundary(cleaned, self.MAX_DIALOGUE_CHARS)
+
+        return cleaned
+
+
+def create_pre_validator_from_assets(
+    era: str = "",
+    assets: Dict = None,
+    character_arcs: Dict = None
+) -> PromptPreValidator:
+    """
+    Factory function to create a PromptPreValidator from pipeline assets.
+
+    Args:
+        era: Era constraint string
+        assets: Asset manifest from generate_asset_manifest()
+        character_arcs: Character arcs from generate_character_deep_dive()
+
+    Returns:
+        Configured PromptPreValidator instance
+    """
+    known_characters = []
+    known_locations = []
+    interaction_rules = {}
+
+    if assets:
+        # Extract character names
+        for char in assets.get('characters', []):
+            known_characters.append(char.get('name', ''))
+        # Extract location names
+        for loc in assets.get('locations', []):
+            known_locations.append(loc.get('name', ''))
+        # Extract interaction rules
+        interaction_rules = assets.get('interaction_rules', {})
+
+    if character_arcs:
+        # Also get character names from arcs
+        for char in character_arcs.get('characters', []):
+            name = char.get('name', '')
+            if name and name not in known_characters:
+                known_characters.append(name)
+
+    return PromptPreValidator(
+        era=era,
+        known_characters=known_characters,
+        known_locations=known_locations,
+        interaction_rules=interaction_rules
+    )
 
 
 # Lazy client initialization
