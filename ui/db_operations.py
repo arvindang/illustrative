@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from models.base import SessionLocal
 from models.user import User
 from models.novel import GraphicNovel
-from api.dependencies import hash_password, verify_password
+from auth_utils import hash_password, verify_password
 from storage.bucket import BucketStorage
 
 

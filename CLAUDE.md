@@ -108,14 +108,13 @@ illustrate-ai/
 │   ├── scripting_agent.py
 │   ├── illustrator_agent.py
 │   └── compositor_agent.py
-├── api/                 # FastAPI routes (Railway deployment)
 ├── models/              # SQLAlchemy models (User, Novel)
 ├── migrations/          # Alembic database migrations
 ├── storage/             # S3/bucket storage utilities
 ├── tests/               # pytest test suite
 ├── scripts/             # Utility/debug scripts
 ├── docs/                # Documentation (PRD, GEMINI.md, etc.)
-├── deploy/              # Deployment configs (Procfile, railway.toml)
+├── deploy/              # Alembic config for migrations
 ├── assets/
 │   ├── input/           # Source .txt files
 │   └── output/          # Generated content
