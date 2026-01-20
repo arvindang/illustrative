@@ -3,7 +3,8 @@ import sys
 
 import streamlit as st
 
-from models.base import SessionLocal, engine, Base
+# Import models package to register all models with Base before create_all()
+from models import SessionLocal, engine, Base, User, GraphicNovel
 
 # Page Configuration
 st.set_page_config(page_title="Illustrative AI", page_icon="📚", layout="centered")
