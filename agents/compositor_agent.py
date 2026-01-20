@@ -71,8 +71,8 @@ class CompositorAgent:
         Returns:
             Cleaned dialogue text without name prefixes or stage directions
         """
-        if not text:
-            return text
+        if not text or text.strip().lower() in ("null", "none"):
+            return ""
 
         cleaned = text.strip()
 
@@ -511,8 +511,37 @@ class CompositorAgent:
                 if panel.get('caption'):
                     self.draw_caption_box(draw, panel['caption'], panel_rect, position="top-left")
 
-                # 2. Draw Dialogue bubble (if present)
-                if panel.get('dialogue'):
+                # 2. Draw Dialogue bubble(s) (if present)
+                # Check for dialogue_bubbles (multi-speaker) first, fallback to single dialogue
+                if panel.get('dialogue_bubbles'):
+                    used_positions = set()
+                    has_caption = panel.get('caption')
+                    for bubble in panel['dialogue_bubbles']:
+                        text = bubble.get('text', '')
+                        if text and text.strip().lower() != "null":
+                            pos_code = bubble.get('position', 'top-left')
+
+                            # Avoid overlap: If caption exists at top-left, move top positions to bottom
+                            if has_caption and pos_code.startswith('top'):
+                                top_to_bottom = {
+                                    "top-left": "bottom-left",
+                                    "top-right": "bottom-right",
+                                }
+                                pos_code = top_to_bottom.get(pos_code, pos_code)
+
+                            # If position already used, find alternative
+                            if pos_code in used_positions:
+                                alternatives = ["top-right", "bottom-left", "bottom-right", "top-left"]
+                                for alt in alternatives:
+                                    if alt not in used_positions:
+                                        pos_code = alt
+                                        break
+
+                            used_positions.add(pos_code)
+                            self.draw_speech_bubble(draw, text, panel_rect, pos_code)
+
+                elif panel.get('dialogue'):
+                    # Single dialogue handling (existing logic)
                     # Start with script-defined bubble position
                     pos_code = panel.get('bubble_position', 'top-left')
 

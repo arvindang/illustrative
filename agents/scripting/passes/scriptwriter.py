@@ -255,15 +255,28 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
            - 'panel_size': One of "large" (50%+ of page), "medium" (25-50%), "small" (15-25%)
              * Use "large" for dramatic reveals, action climaxes, establishing shots
              * Use "small" for rapid action sequences, reactions, transitions
-        4. For character DIALOGUE, you have TWO options:
-           OPTION A - Single speaker: Use 'dialogue' field (MAXIMUM 120 characters)
+        4. DIALOGUE LENGTH - Match text length to panel_size for visual balance:
+           - 'large' panels (50%+ of page): 80-120 characters per dialogue bubble
+           - 'medium' panels (25-50%): 50-80 characters per dialogue bubble
+           - 'small' panels (15-25%): 20-50 characters per dialogue bubble
+           Choose your words carefully to fit the space while advancing the story.
+           Shorter is often better - let the art tell the story.
+
+        5. For character DIALOGUE, you have TWO options:
+           OPTION A - Single speaker: Use 'dialogue' field
            OPTION B - Multiple speakers: Use 'dialogue_bubbles' array for 2-3 speakers in same panel:
-             [{{"speaker": "Character Name", "text": "Their line (max 120 chars)", "position": "top-left"}}]
+             [{{"speaker": "Character Name", "text": "Their line", "position": "top-left"}}]
              Positions: "top-left", "top-right", "bottom-left", "bottom-right"
            - Keep dialogue punchy and natural - no stage directions
            - If dialogue is interrupted, use em-dash: "Wait—"
-        5. Use 'caption' for narration boxes (MAXIMUM 140 chars)
-        6. For EACH panel, provide a STRUCTURED 'advice' object with:
+
+        6. CAPTION LENGTH - Match narration to panel_size:
+           - 'large' panels: 100-150 characters
+           - 'medium' panels: 60-100 characters
+           - 'small' panels: 30-60 characters
+
+        7. If a panel has NO dialogue or caption, OMIT those fields entirely (do NOT use "null" or empty strings).
+        8. For EACH panel, provide a STRUCTURED 'advice' object with:
            - 'scene_type': "{scene_type}"
            - 'required_gear': Object mapping character names to gear list
            - 'era_constraints': Era-specific requirements
@@ -316,12 +329,9 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
         result['suggested_panel_count'] = suggested_panel_count
         result['scene_type'] = scene_type
 
-        # Enforce text length limits (safety net if LLM doesn't follow instructions)
-        MAX_DIALOGUE_CHARS = 120  # Raised from 80 for better flow
-        MAX_CAPTION_CHARS = 140   # Raised from 100 for better narration
-
-        def clean_dialogue(text: str, max_chars: int) -> str:
-            """Clean punctuation and enforce length limit."""
+        # Post-process: Remove "null" strings and clean punctuation (no truncation)
+        def clean_text(text: str) -> str:
+            """Clean punctuation patterns. Trust LLM to follow length guidelines."""
             if not text:
                 return text
             # Clean up bad punctuation patterns
@@ -331,29 +341,40 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
             text = re.sub(r'\.\.\.\.+', '...', text)  # Multiple dots -> three
             text = re.sub(r'!!+', '!', text)  # Multiple ! -> one
             text = re.sub(r'\?\?+', '?', text)  # Multiple ? -> one
-
-            if len(text) > max_chars:
-                # Find last word boundary before limit
-                truncated = text[:max_chars].rsplit(' ', 1)[0]
-                text = truncated + '...'
             return text
 
-        for panel in result.get('panels', []):
-            # Process single dialogue field
-            dialogue = panel.get('dialogue', '')
-            if dialogue:
-                panel['dialogue'] = clean_dialogue(dialogue, MAX_DIALOGUE_CHARS)
+        def is_null_or_empty(text) -> bool:
+            """Check if text is null, "null", None, or empty."""
+            if text is None:
+                return True
+            if isinstance(text, str):
+                return text.strip().lower() in ("", "null", "none")
+            return False
 
-            # Process dialogue_bubbles array (multiple speakers)
+        for panel in result.get('panels', []):
+            # Remove "null" strings from dialogue field
+            if is_null_or_empty(panel.get('dialogue')):
+                panel.pop('dialogue', None)
+            elif panel.get('dialogue'):
+                panel['dialogue'] = clean_text(panel['dialogue'])
+
+            # Clean dialogue_bubbles array - remove null/empty entries
             bubbles = panel.get('dialogue_bubbles', [])
             if bubbles:
+                cleaned_bubbles = []
                 for bubble in bubbles:
-                    if bubble.get('text'):
-                        bubble['text'] = clean_dialogue(bubble['text'], MAX_DIALOGUE_CHARS)
+                    if not is_null_or_empty(bubble.get('text')):
+                        bubble['text'] = clean_text(bubble['text'])
+                        cleaned_bubbles.append(bubble)
+                if cleaned_bubbles:
+                    panel['dialogue_bubbles'] = cleaned_bubbles
+                else:
+                    panel.pop('dialogue_bubbles', None)
 
-            # Truncate caption if too long
-            caption = panel.get('caption', '')
-            if caption:
-                panel['caption'] = clean_dialogue(caption, MAX_CAPTION_CHARS)
+            # Remove "null" strings from caption field
+            if is_null_or_empty(panel.get('caption')):
+                panel.pop('caption', None)
+            elif panel.get('caption'):
+                panel['caption'] = clean_text(panel['caption'])
 
         return result
