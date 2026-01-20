@@ -5,8 +5,5 @@
 builder = "nixpacks"
 
 [deploy]
-# Use healthcheck endpoint for API service
-healthcheckPath = "/health"
-healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
