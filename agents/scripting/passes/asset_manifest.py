@@ -81,6 +81,7 @@ async def generate_asset_manifest(
     PART 1: CHARACTER DESIGN
     For each of the following characters, provide:
     - name: Canonical name
+    - aliases: ALL name variants used in the source text (first name, last name, titles, nicknames, epithets like "the Professor"). For each character, list EVERY way the text refers to them.
     - description: Detailed physical description (facial features, clothing, color palette). ALL clothing and accessories must be era-appropriate.
     - age_range: e.g., "mid-30s", "elderly", "young adult"
     - occupation: e.g., "Sea Captain", "Professor"
@@ -132,7 +133,7 @@ async def generate_asset_manifest(
     """
 
     model = config.scripting_model_global_context
-    contents = [combined_prompt] if cache_name else [combined_prompt, f"SOURCE BOOK:\n{full_text_fallback[:50000]}"]
+    contents = [combined_prompt] if cache_name else [combined_prompt, f"SOURCE BOOK:\n{full_text_fallback[:config.fallback_text_max_chars]}"]
 
     # Acquire TPM capacity for combined manifest
     estimated_tokens = estimate_tokens_for_text(combined_prompt)

@@ -18,6 +18,7 @@ from PIL import Image
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.lib.utils import ImageReader
 from ebooklib import epub
+from config import config
 
 
 class ExportAgent:
@@ -80,6 +81,8 @@ class ExportAgent:
             img_w, img_h = first_img.size
 
         c = pdf_canvas.Canvas(str(pdf_path), pagesize=(img_w, img_h))
+        c.setTitle(output_path.stem.replace("-", " ").replace("_", " ").title())
+        c.setAuthor("Illustrative AI")
 
         for img_path in images:
             # Convert to JPEG in memory for better compression
@@ -122,7 +125,7 @@ class ExportAgent:
 
         # Fixed Layout metadata (EPUB 3)
         book.add_metadata(None, 'meta', 'pre-paginated', {'property': 'rendition:layout'})
-        book.add_metadata(None, 'meta', 'landscape', {'property': 'rendition:orientation'})
+        book.add_metadata(None, 'meta', 'portrait', {'property': 'rendition:orientation'})
         book.add_metadata(None, 'meta', 'auto', {'property': 'rendition:spread'})
 
         spine = ['nav']
@@ -149,7 +152,7 @@ class ExportAgent:
             <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                 <head>
                     <title>Page {page_num}</title>
-                    <meta name="viewport" content="width=1200, height=1600"/>
+                    <meta name="viewport" content="width={config.page_width}, height={config.page_height}"/>
                     <style>
                         body {{ margin: 0; padding: 0; background-color: #FFFFFF; }}
                         img {{ width: 100%; height: 100%; display: block; }}

@@ -1,12 +1,13 @@
 import asyncio
 from pathlib import Path
-from agents import ScriptingAgent, IllustratorAgent, CompositorAgent
+from agents import ScriptingAgent, CompositorAgent, get_image_agents
+from config import config
 
 async def run_production():
     """
     Simplified 3-step production pipeline:
     1. ScriptingAgent: Generates script + asset manifest (characters & objects descriptions)
-    2. IllustratorAgent: Generates reference sheets + panel images
+    2. Image Agents: Generates reference sheets + panel images (Gemini or OpenAI backend)
     3. CompositorAgent: Composes pages + exports PDF/EPUB
     """
     print("🚀 Starting Production Run (Simplified Pipeline)...")
@@ -19,6 +20,7 @@ async def run_production():
     print(f"   Input: {input_file}")
     print(f"   Target: {target_pages} pages")
     print(f"   Style: {style}")
+    print(f"   Image backend: {config.image_backend}")
     print()
 
     # Derive script path
@@ -36,13 +38,14 @@ async def run_production():
 
     # --- STEP 2: ILLUSTRATION (reference sheets + panels) ---
     print("\n--- STEP 2: ILLUSTRATION ---")
-    illustrator = IllustratorAgent(script_path, f"{style} style, {tone} tone")
+    style_prompt = f"{style} style, {tone} tone"
+    ref_agent, panel_agent = get_image_agents(script_path, style_prompt)
 
     # Generate reference sheets for characters and objects
-    await illustrator.generate_all_references(style=style)
+    await ref_agent.generate_all_references(style=style)
 
     # Generate panel images
-    await illustrator.run_production()
+    await panel_agent.run_production()
 
     # --- STEP 3: COMPOSITION + EXPORT ---
     print("\n--- STEP 3: COMPOSITION + EXPORT ---")

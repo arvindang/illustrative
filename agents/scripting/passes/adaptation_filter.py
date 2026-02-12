@@ -104,7 +104,7 @@ async def generate_adaptation_filter(
         contents = [prompt]
         cached_content = cache_name
     else:
-        contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback[:80000]}"]
+        contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback[:config.fallback_text_max_chars]}"]
         cached_content = None
 
     # Acquire TPM capacity

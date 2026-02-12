@@ -93,8 +93,13 @@ Respond with a JSON object:
                         "type": "OBJECT",
                         "properties": {
                             "consistent": {"type": "BOOLEAN"},
-                            "inconsistent_characters": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "issue_descriptions": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "character_issues": {
+                                "type": "OBJECT",
+                                "additionalProperties": {
+                                    "type": "ARRAY",
+                                    "items": {"type": "STRING"}
+                                }
+                            },
                             "recommendations": {"type": "ARRAY", "items": {"type": "STRING"}}
                         },
                         "required": ["consistent"]

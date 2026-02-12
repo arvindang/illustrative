@@ -85,9 +85,9 @@ class ReferenceAgent:
         effective_limits = config.get_effective_rate_limits()
         self.ref_limiter = RateLimiter(rpm_limit=effective_limits['character_rpm'])
 
-        # Multi-pass reference generation settings
-        self.ref_candidates = 3  # Number of candidates to generate
-        self.enable_multi_pass_refs = True  # Toggle for multi-pass generation
+        # Multi-pass reference generation settings (from config)
+        self.ref_candidates = config.ref_candidates
+        self.enable_multi_pass_refs = config.enable_multi_pass_refs
 
     async def run(self, style: str = None) -> None:
         """
@@ -141,6 +141,13 @@ class ReferenceAgent:
                         # Only map last name if it's unique (simple collision avoidance)
                         if last_name not in self.character_map:
                             self.character_map[last_name] = char_folder
+
+                # 4. Map aliases from asset manifest
+                aliases = meta.get('aliases', [])
+                for alias in aliases:
+                    alias_key = alias.lower().strip()
+                    if alias_key and alias_key not in self.character_map:
+                        self.character_map[alias_key] = char_folder
             except Exception as e:
                 print(f"Warning: Error reading metadata for {char_folder}: {e}")
 
@@ -362,6 +369,7 @@ Analyze each candidate and respond with ONLY a JSON object:
             # Save metadata
             metadata = {
                 "name": name,
+                "aliases": char_data.get('aliases', []),
                 "description": description,
                 "age_range": char_data.get('age_range', 'unknown'),
                 "occupation": char_data.get('occupation', 'unknown'),

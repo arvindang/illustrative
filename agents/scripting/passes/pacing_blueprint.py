@@ -133,8 +133,8 @@ async def _generate_blueprint_chunk(
 
     CLIFFHANGER RULES:
     - Best cliffhangers: shocking reveals, danger moments, emotional decisions, mysterious arrivals
-    - Place cliffhangers on ODD page numbers (right side of spread when book is open)
-    - The NEXT page (even, left side) is what readers see first when turning
+    - Place cliffhangers on any page where a page-turn creates narrative suspense. Every page boundary is a potential suspense point in digital reading.
+    - The NEXT page is what readers see after swiping/clicking forward
 
     CRITICAL PACING RULES:
     {pacing_rules}
@@ -150,7 +150,7 @@ async def _generate_blueprint_chunk(
         contents = [prompt]
         cached_content = cache_name
     else:
-        contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback}"]
+        contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback[:config.fallback_text_max_chars]}"]
         cached_content = None
 
     # Acquire TPM capacity
@@ -253,6 +253,15 @@ async def generate_pacing_blueprint(
             adaptation_guidance += f"""
     FAN-FAVORITE MOMENTS (must include, make visually stunning):
 {beloved_list}
+    """
+
+        # Cuttable scenes (omit or compress)
+        cuttable = adaptation_filter.get('cuttable_scenes', [])
+        if cuttable:
+            cuttable_list = "\n".join([f"  - {s['description']}" for s in cuttable])
+            adaptation_guidance += f"""
+    CUTTABLE SCENES (omit or compress to a single transitional panel):
+{cuttable_list}
     """
 
         # Pacing recommendations

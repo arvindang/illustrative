@@ -43,7 +43,7 @@ class PromptPreValidator:
             # Handle issues before LLM call
     """
 
-    MAX_DIALOGUE_CHARS = 80
+    MAX_DIALOGUE_CHARS = {"large": 100, "medium": 70, "small": 40}
     MAX_CAPTION_CHARS = 100
 
     # Era-specific forbidden terms (modern words that shouldn't appear)
@@ -89,7 +89,8 @@ class PromptPreValidator:
         dialogue: str = "",
         caption: str = "",
         characters: List[str] = None,
-        scene_type: str = ""
+        scene_type: str = "",
+        panel_size: str = "medium"
     ) -> PreValidationResult:
         """
         Validate all inputs for a single panel BEFORE LLM generation.
@@ -100,6 +101,7 @@ class PromptPreValidator:
             caption: Proposed caption/narration text
             characters: List of character names in the panel
             scene_type: Type of scene for requirement checking
+            panel_size: Panel size ("large", "medium", "small") for length limits
 
         Returns:
             PreValidationResult with validation status and any auto-fixes
@@ -108,12 +110,13 @@ class PromptPreValidator:
         suggestions = []
         auto_fixed = {}
 
-        # 1. Validate dialogue length
-        if dialogue and len(dialogue) > self.MAX_DIALOGUE_CHARS:
+        # 1. Validate dialogue length (panel-size-aware)
+        max_dialogue = self.MAX_DIALOGUE_CHARS.get(panel_size, self.MAX_DIALOGUE_CHARS["medium"])
+        if dialogue and len(dialogue) > max_dialogue:
             # Auto-fix by truncating
-            fixed = self._truncate_at_word_boundary(dialogue, self.MAX_DIALOGUE_CHARS)
+            fixed = self._truncate_at_word_boundary(dialogue, max_dialogue)
             auto_fixed["dialogue"] = fixed
-            issues.append(f"Dialogue too long ({len(dialogue)} chars > {self.MAX_DIALOGUE_CHARS}). Auto-truncated.")
+            issues.append(f"Dialogue too long ({len(dialogue)} chars > {max_dialogue} for {panel_size} panel). Auto-truncated.")
 
         # 2. Validate caption length
         if caption and len(caption) > self.MAX_CAPTION_CHARS:
@@ -219,7 +222,7 @@ class PromptPreValidator:
                 found.append(term)
         return found
 
-    def preprocess_dialogue(self, dialogue: str) -> str:
+    def preprocess_dialogue(self, dialogue: str, panel_size: str = "medium") -> str:
         """
         Clean and fix common dialogue issues before LLM processing.
         Returns cleaned dialogue.
@@ -240,10 +243,11 @@ class PromptPreValidator:
         cleaned = re.sub(r'\([^)]*\)', '', cleaned)  # Remove (parentheticals)
         cleaned = re.sub(r'\[[^\]]*\]', '', cleaned)  # Remove [brackets]
 
-        # Trim and length-check
+        # Trim and length-check (panel-size-aware)
         cleaned = cleaned.strip()
-        if len(cleaned) > self.MAX_DIALOGUE_CHARS:
-            cleaned = self._truncate_at_word_boundary(cleaned, self.MAX_DIALOGUE_CHARS)
+        max_chars = self.MAX_DIALOGUE_CHARS.get(panel_size, self.MAX_DIALOGUE_CHARS["medium"])
+        if len(cleaned) > max_chars:
+            cleaned = self._truncate_at_word_boundary(cleaned, max_chars)
 
         return cleaned
 

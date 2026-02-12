@@ -117,7 +117,7 @@ def render_generate_page():
         with open(input_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        content = uploaded_file.getvalue().decode('utf-8')
+        content = uploaded_file.getvalue().decode('utf-8-sig', errors='replace')
         word_count = len(content.split())
         file_hash = get_file_hash(content)
 

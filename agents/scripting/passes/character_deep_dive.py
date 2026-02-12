@@ -44,7 +44,7 @@ async def generate_character_deep_dive(
     # Create a summary of pages for context
     page_summaries = [
         f"Page {p['page_number']}: {p.get('summary', '')} (Characters: {', '.join(p.get('key_characters', []))})"
-        for p in blueprint[:50]  # Limit to first 50 pages for context size
+        for p in blueprint  # Use full blueprint so late-appearing characters get proper tracking
     ]
     page_context = "\n".join(page_summaries)
 
@@ -106,7 +106,7 @@ async def generate_character_deep_dive(
         contents = [prompt]
         cached_content = cache_name
     else:
-        contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback[:50000]}"]
+        contents = [prompt, f"SOURCE BOOK:\n{full_text_fallback[:config.fallback_text_max_chars]}"]
         cached_content = None
 
     # Acquire TPM capacity

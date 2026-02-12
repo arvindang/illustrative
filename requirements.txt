@@ -1,6 +1,7 @@
 python-dotenv
 google-genai
 google-api-core
+openai>=1.60.0
 Pillow
 streamlit
 reportlab

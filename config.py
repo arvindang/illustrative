@@ -124,8 +124,8 @@ class PipelineConfig:
     # Gemini 3 Pro Image: 14 input images max, 32K output tokens, highest quality
     # For Gemini 3 only mode: all models set to gemini-3-pro-image-preview
     image_model_primary: str = "gemini-3-pro-image-preview"   # Best quality, 14 ref images
-    image_model_fallback: str = "gemini-3-pro-image-preview"  # Same as primary (Gemini 3 only)
-    image_model_last_resort: str = "gemini-3-pro-image-preview"  # Same as primary (Gemini 3 only)
+    image_model_fallback: str = "gemini-2.5-flash-preview-image"  # Fast fallback
+    image_model_last_resort: str = "gemini-2.5-flash-image"  # Last resort (1024px, fastest)
 
     # Character Design Models
     character_model_attributes: str = "gemini-3-flash-preview"  # Fast text/attributes
@@ -187,6 +187,7 @@ class PipelineConfig:
     # ==================== Retry & Resilience ====================
     max_page_retries: int = 2         # Max retries for failed page scripts
     retry_delay_base: float = 2.0     # Base delay for retries (exponential backoff)
+    fallback_text_max_chars: int = 200_000  # Max chars when cache unavailable
 
     # ==================== Panel Layout Settings ====================
     # Panel size configuration (percentage of page area)
@@ -220,6 +221,35 @@ class PipelineConfig:
     font_path: str = "fonts/PatrickHand-Regular.ttf"
     font_size: int = 24  # Reduced from 32 to cover less panel area
 
+    # ==================== Image Backend Selection ====================
+    # "gemini" (default) or "openai"
+    image_backend: str = field(default_factory=lambda: os.getenv("IMAGE_BACKEND", "gemini"))
+
+    # ==================== OpenAI Image Configuration ====================
+    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+
+    # Model fallback chain (primary -> fallback -> last resort)
+    openai_image_model_primary: str = "gpt-image-1"
+    openai_image_model_fallback: str = "gpt-image-1"
+    openai_image_model_last_resort: str = "gpt-image-1-mini"
+
+    # Quality and size settings
+    openai_image_quality: str = "medium"          # low/medium/high — panels
+    openai_ref_image_quality: str = "high"         # character reference sheets
+    openai_panel_size: str = "1536x1024"           # Landscape for panels
+    openai_ref_size: str = "1024x1024"             # Square for character sheets
+
+    # Batch API settings
+    openai_batch_enabled: bool = field(
+        default_factory=lambda: os.getenv("OPENAI_BATCH_ENABLED", "true").lower() == "true"
+    )
+    openai_batch_poll_interval: int = 30           # Seconds between status polls
+    openai_batch_timeout: int = 86400              # 24h max wait
+
+    # Sync mode settings
+    openai_sync_rpm: int = 7                       # RPM for sync (non-batch) mode
+    openai_input_fidelity: str = "high"            # Reference image preservation
+
     # ==================== Image Settings ====================
     image_aspect_ratio: str = "4:3"
     reference_image_aspect_ratio: str = "1:1"
@@ -228,6 +258,15 @@ class PipelineConfig:
     # If True, stop pipeline when primary image model quota is exhausted
     # If False, fallback to secondary models (default behavior)
     stop_on_primary_quota_exhausted: bool = True
+
+    # ==================== Reference Generation ====================
+    ref_candidates: int = 2  # Number of reference sheet candidates (was 3)
+    enable_multi_pass_refs: bool = True
+
+    # ==================== Panel Validation ====================
+    # Post-generation LLM validation of panels (costs 1 API call per panel)
+    enable_panel_validation: bool = False
+    enable_consistency_audit: bool = False
 
     # ==================== Image Composition Analysis ====================
     # LLM-based analysis of generated panels for smart cropping and bubble placement

@@ -246,6 +246,7 @@ ASSET_MANIFEST_SCHEMA = {
                 "type": "OBJECT",
                 "properties": {
                     "name": {"type": "STRING"},
+                    "aliases": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "description": {"type": "STRING"},
                     "age_range": {"type": "STRING"},
                     "occupation": {"type": "STRING"},
@@ -253,7 +254,7 @@ ASSET_MANIFEST_SCHEMA = {
                     "specific_era_markers": {"type": "STRING"},
                     "color_signature": {"type": "ARRAY", "items": {"type": "STRING"}}
                 },
-                "required": ["name", "description"]
+                "required": ["name", "description", "aliases"]
             }
         },
         "objects": {

@@ -82,9 +82,9 @@ class PanelAgent:
 
         self.current_model = config.image_model_primary
 
-        # Validation settings
-        self.enable_panel_validation = True  # Validate each panel after generation
-        self.enable_consistency_audit = True  # Audit character consistency per page
+        # Validation settings (read from config to avoid wasted API calls)
+        self.enable_panel_validation = config.enable_panel_validation
+        self.enable_consistency_audit = config.enable_consistency_audit
         self.max_regeneration_attempts = 2  # Max times to regenerate a failed panel
         self.era_constraints = ""  # Set by caller for era validation
 
@@ -100,6 +100,17 @@ class PanelAgent:
         self.character_arcs = {}
         self.scene_states = {}
         self._load_character_arcs()
+
+        # Load color script from assets for act-based color direction
+        self.color_script = {}
+        self._load_color_script()
+
+        # Pre-compute total pages from script for act-based color direction
+        self.total_pages = 0
+        if self.script_path.exists():
+            with open(self.script_path, "r") as f:
+                script_data = json.load(f)
+            self.total_pages = len(script_data)
 
     def _load_character_arcs(self):
         """Load character arcs data from the enrichment pipeline output."""
@@ -119,6 +130,60 @@ class PanelAgent:
             print(f"   Loaded character arcs: {len(self.character_arcs.get('characters', []))} characters")
         else:
             print(f"   Character arcs not found at {arcs_path}, using defaults")
+
+    def _load_color_script(self):
+        """Load color script from asset manifest for act-based color direction."""
+        stem = self.script_path.stem.replace('_full_script', '').replace('_test_page', '')
+        assets_path = self.script_path.parent / f"{stem}_assets.json"
+
+        if assets_path.exists():
+            with open(assets_path, "r") as f:
+                assets = json.load(f)
+            self.color_script = assets.get('color_script', {})
+            if self.color_script:
+                print(f"   Loaded color script: {len(self.color_script)} keys")
+        else:
+            print(f"   Asset manifest not found at {assets_path}, no color script")
+
+    def _get_color_direction(self, page_num: int, total_pages: int) -> str:
+        """
+        Get act-based color direction for the current page.
+
+        Divides the total pages into three acts and returns the
+        corresponding color palette from the color script.
+        """
+        if not self.color_script:
+            return ""
+
+        # Determine which act this page falls into (rough thirds)
+        act_1_end = total_pages // 3
+        act_2_end = (total_pages * 2) // 3
+
+        if page_num <= act_1_end:
+            colors = self.color_script.get('act_1_colors', [])
+            act_label = "Act 1"
+        elif page_num <= act_2_end:
+            colors = self.color_script.get('act_2_colors', [])
+            act_label = "Act 2"
+        else:
+            colors = self.color_script.get('act_3_colors', [])
+            act_label = "Act 3"
+
+        if not colors:
+            # Fall back to primary palette
+            colors = self.color_script.get('primary_palette', [])
+            act_label = "Global"
+
+        if colors:
+            palette_str = ", ".join(colors)
+            associations = self.color_script.get('color_associations', {})
+            mood_str = ", ".join(f"{k}: {v}" for k, v in associations.items()) if associations else ""
+            direction = f"COLOR DIRECTION ({act_label}): Palette: {palette_str}."
+            if mood_str:
+                direction += f" Color associations: {mood_str}."
+            return direction
+
+        return ""
 
     def _get_scene_context(self, page_num: int, panel_data: dict) -> str:
         """
@@ -236,15 +301,8 @@ class PanelAgent:
 
             # Determine compositional negative space based on bubble position
             bubble_pos = panel_data.get('bubble_position', 'top-left')
-            composition_instruction = ""
-            if bubble_pos == "top-left":
-                composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the TOP-LEFT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
-            elif bubble_pos == "top-right":
-                composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the TOP-RIGHT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
-            elif bubble_pos == "bottom-left":
-                composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the BOTTOM-LEFT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
-            elif bubble_pos == "bottom-right":
-                composition_instruction = "COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the BOTTOM-RIGHT area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
+            area_label = bubble_pos.upper().replace('-', '-')
+            composition_instruction = f"COMPOSITION RULE: Use a cinematic 'rule of thirds' composition. Ensure the {area_label} area is uncluttered, consisting only of simple background elements (like sky, a wall, or soft-focus scenery) to provide breathing room for a later text overlay. Do NOT place character faces or primary action in this corner."
 
             # 1. Construct the master prompt
             # Parse structured advice if available, fall back to string for backward compatibility
@@ -272,8 +330,6 @@ class PanelAgent:
                 era_block = f"""
             MANDATORY HISTORICAL/ERA CONSTRAINTS (CRITICAL - MUST BE FOLLOWED):
             {self.era_constraints}
-
-            UNDERWATER SCENES: If characters are underwater or in water, they MUST wear appropriate period diving equipment (brass helmets, canvas suits with metal plates, air hoses). NO bare skin underwater. NO modern SCUBA gear.
             """
 
             # Build scene-specific context from character arcs
@@ -297,8 +353,12 @@ class PanelAgent:
             - Character scale relative to environment
             """
 
+            # Get act-based color direction
+            color_direction = self._get_color_direction(page_num, self.total_pages) if self.total_pages > 0 else ""
+
             master_prompt = f"""
             STYLE DIRECTIVE: {self.style_prompt}
+            {color_direction}
             {era_block}
             {scene_context_block}
             {continuity_instruction}
@@ -416,6 +476,16 @@ class PanelAgent:
                 print(f"   (Including refs for Chars: {', '.join(chars_included)})")
             if objects_included:
                 print(f"   (Including refs for Objects: {', '.join(objects_included)})")
+
+            # Gemini 3 Pro Image supports max 14 input images
+            MAX_INPUT_IMAGES = 14
+            image_count = sum(1 for item in input_contents if not isinstance(item, str))
+            if image_count > MAX_INPUT_IMAGES:
+                print(f"   Warning: {image_count} reference images exceeds limit of {MAX_INPUT_IMAGES}, trimming...")
+                # Keep prompt (strings) and trim images from the end (later = least important)
+                trimmed = [item for item in input_contents if isinstance(item, str)]
+                images = [item for item in input_contents if not isinstance(item, str)]
+                input_contents = trimmed + images[:MAX_INPUT_IMAGES]
 
             # Acquire TPM capacity for panel generation
             # Count reference images (everything after the prompt in input_contents)

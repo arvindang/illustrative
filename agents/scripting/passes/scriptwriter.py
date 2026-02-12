@@ -27,7 +27,8 @@ async def write_page_script(
     assets: dict = None,
     prev_page: dict = None,
     next_page: dict = None,
-    prev_page_script: dict = None
+    prev_page_script: dict = None,
+    cached_content: str = None
 ) -> dict:
     """
     PASS 5: THE SCRIPTWRITER (Enhanced)
@@ -48,6 +49,7 @@ async def write_page_script(
         prev_page: Blueprint of previous page (for continuity)
         next_page: Blueprint of next page (for setup/payoff)
         prev_page_script: ACTUAL generated script from previous page (for dialogue continuity)
+        cached_content: Optional Gemini cache name for source text access (used for dialogue scenes)
 
     Returns:
         Page script dict with panels
@@ -294,7 +296,7 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
         OUTPUT FORMAT: JSON.
         """
 
-        # Prepare request - NO CACHED CONTENT used here to save TPM in parallel calls
+        # Use cached content for dialogue scenes to give LLM access to source text
         model = config.scripting_model_page_script
         contents = [prompt]
 
@@ -306,6 +308,7 @@ Your dialogue MUST flow naturally from this. Don't repeat what was said. Continu
             model=model,
             contents=contents,
             config=types.GenerateContentConfig(
+                cached_content=cached_content,
                 response_mime_type="application/json",
                 response_schema=PAGE_SCRIPT_SCHEMA
             )

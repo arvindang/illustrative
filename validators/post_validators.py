@@ -181,7 +181,7 @@ class ScriptValidator:
     - Major era anachronisms requiring regeneration
     """
 
-    MAX_DIALOGUE_LENGTH = 100
+    MAX_DIALOGUE_LENGTH = {"large": 100, "medium": 70, "small": 40}
     MAX_CAPTION_LENGTH = 120
     BUBBLE_POSITIONS = ["top-left", "top-right", "bottom-left", "bottom-right"]
 
@@ -274,6 +274,9 @@ class ScriptValidator:
         # Check for dead characters appearing (manual review)
         self._check_dead_characters(fixed_script)
 
+        # Check forbidden combinations from asset manifest
+        self._check_forbidden_combinations(fixed_script)
+
         # Update report totals
         self.report.total_issues = len(self.report.issues)
         self.report.auto_fixed = sum(1 for i in self.report.issues if i.severity == "auto_fix")
@@ -288,18 +291,20 @@ class ScriptValidator:
         self.report.issues.append(issue)
 
     def _fix_dialogue_length(self, panel: Dict, page_num: int, panel_id: int):
-        """Fix dialogue that exceeds maximum length."""
+        """Fix dialogue that exceeds maximum length (panel-size-aware)."""
         dialogue = panel.get("dialogue", "")
-        if dialogue and len(dialogue) > self.MAX_DIALOGUE_LENGTH:
+        panel_size = panel.get("panel_size", "medium")
+        max_len = self.MAX_DIALOGUE_LENGTH.get(panel_size, self.MAX_DIALOGUE_LENGTH["medium"])
+        if dialogue and len(dialogue) > max_len:
             # Truncate at word boundary with ellipsis
-            truncated = dialogue[:self.MAX_DIALOGUE_LENGTH - 3].rsplit(" ", 1)[0] + "..."
+            truncated = dialogue[:max_len - 3].rsplit(" ", 1)[0] + "..."
             panel["dialogue"] = truncated
             self._add_issue(ValidationIssue(
                 issue_type="dialogue_overflow",
                 page=page_num,
                 panel=panel_id,
                 severity="auto_fix",
-                description=f"Dialogue exceeded {self.MAX_DIALOGUE_LENGTH} chars",
+                description=f"Dialogue exceeded {max_len} chars ({panel_size} panel)",
                 fix_applied="truncation",
                 original_value=dialogue,
                 fixed_value=truncated
@@ -504,6 +509,36 @@ class ScriptValidator:
                             description=f"Character '{char_name}' appears after being marked as dead",
                             fix_applied=None,
                             original_value=char_name,
+                            fixed_value=None
+                        ))
+
+    def _check_forbidden_combinations(self, script: List[Dict]):
+        """Check for forbidden character/object combinations from asset manifest."""
+        forbidden = self.assets.get('forbidden_combinations', [])
+        if not forbidden:
+            return
+
+        for page in script:
+            page_num = page.get("page_number", 0)
+            for panel in page.get("panels", []):
+                panel_id = panel.get("panel_id", 0)
+                chars = set(c.lower() for c in panel.get("characters", []))
+                objects = set(o.lower() for o in panel.get("key_objects", []))
+                panel_items = chars | objects
+
+                for combo in forbidden:
+                    combo_items = [item.lower() for item in combo.get('items', [])]
+                    # Check if all items in the forbidden combo appear in this panel
+                    if combo_items and all(item in panel_items for item in combo_items):
+                        reason = combo.get('reason', 'Forbidden combination')
+                        self._add_issue(ValidationIssue(
+                            issue_type="forbidden_combination",
+                            page=page_num,
+                            panel=panel_id,
+                            severity="warning",
+                            description=f"Forbidden combination detected: {combo.get('items', [])} - {reason}",
+                            fix_applied=None,
+                            original_value=str(combo.get('items', [])),
                             fixed_value=None
                         ))
 

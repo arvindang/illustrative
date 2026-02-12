@@ -63,22 +63,15 @@ class ScriptingAgent:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.cache_name = None
 
-    def load_content(self, test_mode=True) -> str:
+    def load_content(self) -> str:
         """
-        Loads the book content.
-
-        Args:
-            test_mode: If True, returns a truncated version for testing
+        Loads the full book content.
 
         Returns:
             Book content as string
         """
-        with open(self.book_path, "r", encoding="utf-8") as f:
-            full_text = f.read()
-            if test_mode:
-                # Take a generous slice for testing
-                return full_text[:50000]
-            return full_text
+        with open(self.book_path, "r", encoding="utf-8-sig", errors="replace") as f:
+            return f.read()
 
     async def _get_or_create_cache(self, content: str) -> str:
         """
@@ -90,6 +83,14 @@ class ScriptingAgent:
         Returns:
             Cache name to reference in subsequent calls, or None if caching failed
         """
+        # Pre-flight content size validation
+        estimated_tokens = len(content) // 4
+        MAX_CONTEXT_TOKENS = 900_000  # Leave room for prompts within 1M window
+        if estimated_tokens > MAX_CONTEXT_TOKENS:
+            max_chars = MAX_CONTEXT_TOKENS * 4
+            print(f"   Content is ~{estimated_tokens:,} tokens, truncating to {MAX_CONTEXT_TOKENS:,} tokens ({max_chars:,} chars)")
+            content = content[:max_chars]
+
         # Create a deterministic hash for the cache name based on content
         content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
 
@@ -216,7 +217,7 @@ class ScriptingAgent:
                 return json.load(f)
 
         # Load Content
-        full_text = self.load_content(test_mode=False)  # Always load full for caching
+        full_text = self.load_content()
         target_pages = target_page_override or (3 if test_mode else 10)
 
         print(f"\n📚 Scripting '{self.book_path.stem}'")
@@ -333,7 +334,7 @@ class ScriptingAgent:
         full_script = []
         generated_scripts = {}  # idx -> script for lookups
 
-        # PHASE 1: Generate dialogue sequences SEQUENTIALLY
+        # PHASE 1: Generate dialogue sequences SEQUENTIALLY (with cache for source text access)
         for seq_start, seq_end in dialogue_sequences:
             print(f"   🗣️  Generating dialogue sequence pages {seq_start + 1}-{seq_end + 1} sequentially...")
             prev_script = generated_scripts.get(seq_start - 1)  # Previous page if exists
@@ -346,7 +347,8 @@ class ScriptingAgent:
                 try:
                     script = await write_page_script(
                         item, style, context_constraints, character_arcs, asset_manifest,
-                        prev_page, next_page, prev_script
+                        prev_page, next_page, prev_script,
+                        cached_content=cache_name  # Dialogue scenes get source text access
                     )
                     full_script.append(script)
                     generated_scripts[i] = script
@@ -364,11 +366,15 @@ class ScriptingAgent:
                 prev_page = blueprint[i - 1] if i > 0 else None
                 next_page = blueprint[i + 1] if i < len(blueprint) - 1 else None
                 prev_script = generated_scripts.get(i - 1)
+                # Non-sequential dialogue pages still get cache if they're dialogue-typed
+                scene_type = item.get('scene_type', 'dialogue')
+                page_cache = cache_name if scene_type in DIALOGUE_SCENE_TYPES else None
 
                 parallel_tasks.append(
                     write_page_script(
                         item, style, context_constraints, character_arcs, asset_manifest,
-                        prev_page, next_page, prev_script
+                        prev_page, next_page, prev_script,
+                        cached_content=page_cache
                     )
                 )
                 parallel_indices.append(i)
@@ -408,10 +414,13 @@ class ScriptingAgent:
                 prev_page = blueprint[idx - 1] if idx > 0 else None
                 next_page = blueprint[idx + 1] if idx < len(blueprint) - 1 else None
                 prev_script = generated_scripts.get(idx - 1)
+                scene_type = item.get('scene_type', 'dialogue')
+                page_cache = cache_name if scene_type in DIALOGUE_SCENE_TYPES else None
                 retry_tasks.append(
                     write_page_script(
                         item, style, context_constraints, character_arcs, asset_manifest,
-                        prev_page, next_page, prev_script
+                        prev_page, next_page, prev_script,
+                        cached_content=page_cache
                     )
                 )
 

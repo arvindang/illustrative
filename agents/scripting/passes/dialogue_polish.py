@@ -15,6 +15,30 @@ from agents.scripting.schemas import DIALOGUE_POLISH_SCHEMA
 from agents.scripting.utils import get_scribe_limiter
 
 
+def _window_needs_polish(pages_in_window):
+    """Quick check if this window's dialogue likely needs polishing."""
+    all_dialogues = []
+    for page in pages_in_window:
+        for panel in page.get('panels', []):
+            d = panel.get('dialogue', '')
+            if d:
+                all_dialogues.append(d.lower())
+            for bubble in panel.get('dialogue_bubbles', []):
+                t = bubble.get('text', '')
+                if t:
+                    all_dialogues.append(t.lower())
+
+    if not all_dialogues:
+        return False  # No dialogue to polish
+
+    # Check for repeated phrases (same dialogue appearing 2+ times)
+    if len(all_dialogues) != len(set(all_dialogues)):
+        return True
+
+    # If all dialogue is short and varied, likely clean
+    return True  # Default to polishing (conservative)
+
+
 async def polish_dialogue(
     full_script: list,
     character_arcs: dict,
@@ -85,6 +109,14 @@ CHARACTER VOICE PROFILES (dialogue must match these):
             window = window[1:]  # Skip first page (already polished)
             if not window:
                 continue
+
+        # Quick heuristic: skip windows with no dialogue
+        if not _window_needs_polish(window):
+            print(f"   ⏭️  Skipping pages {window_start}-{window_end} (no dialogue to polish)")
+            for page in window:
+                if not polished_script or page['page_number'] > polished_script[-1]['page_number']:
+                    polished_script.append(page)
+            continue
 
         print(f"   📝 Polishing pages {window_start}-{window_end}...")
 

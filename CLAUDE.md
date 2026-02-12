@@ -293,7 +293,7 @@ await illustrator.generate_all_references(style="Botanical Illustration")
 
 ## Development Notes
 
-- Test mode uses 10k character slice from the middle of source text to save tokens
+- Test mode uses a reduced page count (default 3 pages) but loads the full source text for context caching. The full text is needed for accurate beat analysis and adaptation.
 - Production mode processes full text (can be 100+ pages)
 - Font files should be placed in `fonts/` directory (e.g., `PatrickHand-Regular.ttf`)
 - Manifest-based resume means you can interrupt and restart production runs

@@ -3,9 +3,16 @@ import io
 import json
 import re
 from pathlib import Path
+import platform
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from config import config
 from typing import Optional, Dict, List, Tuple
+
+SYSTEM_FONTS = {
+    "Darwin": "/System/Library/Fonts/Helvetica.ttc",
+    "Linux": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "Windows": "C:/Windows/Fonts/arial.ttf",
+}
 from agents.layout_agent import LayoutAgent
 from agents.export_agent import ExportAgent
 
@@ -56,9 +63,14 @@ class CompositorAgent:
         # Load a font (Ensure you have a .ttf file in a 'fonts' folder)
         try:
             self.font = ImageFont.truetype(config.font_path, config.font_size)
-        except:
-            print("Warning: Font not found, using default.")
-            self.font = ImageFont.load_default()
+        except (OSError, IOError):
+            print(f"Warning: Font not found at {config.font_path}, trying system font.")
+            system_font = SYSTEM_FONTS.get(platform.system())
+            try:
+                self.font = ImageFont.truetype(system_font, config.font_size) if system_font else ImageFont.load_default()
+            except (OSError, IOError):
+                print("Warning: System font not found, using PIL default.")
+                self.font = ImageFont.load_default()
 
     def clean_dialogue(self, text: str) -> str:
         """
@@ -163,7 +175,7 @@ class CompositorAgent:
         while font_size >= min_font_size:
             try:
                 test_font = ImageFont.truetype(config.font_path, font_size)
-            except:
+            except (OSError, IOError):
                 test_font = self.font
 
             wrapped = self.wrap_text(text, available_width, font=test_font)
@@ -180,7 +192,7 @@ class CompositorAgent:
         # Still too long - truncate with ellipsis at minimum font size
         try:
             final_font = ImageFont.truetype(config.font_path, min_font_size)
-        except:
+        except (OSError, IOError):
             final_font = self.font
 
         truncated = self._truncate_with_ellipsis(text, available_width, available_height, final_font)
@@ -325,6 +337,18 @@ class CompositorAgent:
         bubble_rect = [x, y, x + bubble_w, y + bubble_h]
         draw.rounded_rectangle(bubble_rect, radius=15, fill="white", outline="black", width=3)
 
+        # Draw speech bubble tail pointing down from bottom-center
+        tail_center_x = x + bubble_w // 2
+        tail_top_y = y + bubble_h
+        tail_points = [
+            (tail_center_x - 8, tail_top_y),      # left base
+            (tail_center_x + 8, tail_top_y),      # right base
+            (tail_center_x + 5, tail_top_y + 15), # tip (offset slightly right)
+        ]
+        draw.polygon(tail_points, fill="white", outline="black")
+        # Cover the outline where tail meets bubble
+        draw.line([(tail_center_x - 7, tail_top_y), (tail_center_x + 7, tail_top_y)], fill="white", width=3)
+
         # Draw text in bubble
         text_x = x + padding
         text_y = y + padding
@@ -450,8 +474,8 @@ class CompositorAgent:
         
         print(f"📄 Assembling Page {page_num} with {num_panels} panels...")
         
-        # Create a blank white canvas
-        canvas = Image.new("RGB", (self.page_width, self.page_height), "white")
+        # Create a blank dark canvas (dark gutters between panels)
+        canvas = Image.new("RGB", (self.page_width, self.page_height), "#1a1a1a")
         draw = ImageDraw.Draw(canvas)
         
         # Get dynamic layout coordinates (uses cache if available from batch generation)
@@ -505,11 +529,26 @@ class CompositorAgent:
                 # Paste the panel
                 canvas.paste(panel_img, (pos_x, pos_y))
 
+                # Draw panel border
+                draw.rectangle(
+                    [pos_x, pos_y, pos_x + panel_w - 1, pos_y + panel_h - 1],
+                    outline="black", width=2
+                )
+
                 panel_rect = (pos_x, pos_y, panel_w, panel_h)
 
                 # 1. Draw Caption (if present)
                 if panel.get('caption'):
-                    self.draw_caption_box(draw, panel['caption'], panel_rect, position="top-left")
+                    # Read position from panel advice/composition, fall back to top-left
+                    caption_pos = "top-left"
+                    advice = panel.get('advice', {})
+                    if isinstance(advice, dict):
+                        comp = advice.get('composition', {})
+                        if isinstance(comp, dict) and comp.get('negative_space'):
+                            caption_pos = comp['negative_space']
+                    if composition and composition.get('recommended_bubble_position'):
+                        caption_pos = composition['recommended_bubble_position']
+                    self.draw_caption_box(draw, panel['caption'], panel_rect, position=caption_pos)
 
                 # 2. Draw Dialogue bubble(s) (if present)
                 # Check for dialogue_bubbles (multi-speaker) first, fallback to single dialogue
