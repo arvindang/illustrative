@@ -12,10 +12,10 @@ async def run_production():
     """
     print("🚀 Starting Production Run (Simplified Pipeline)...")
 
-    input_file = "assets/input/20-thousand-leagues-under-the-sea.txt"
+    input_file = "assets/input/20K Leagues Under the Sea.txt"
     style = "Lush Watercolor"
     tone = "Philosophical"
-    target_pages = 10
+    target_pages = 3
 
     print(f"   Input: {input_file}")
     print(f"   Target: {target_pages} pages")

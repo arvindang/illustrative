@@ -246,13 +246,10 @@ class OpenAIPanelAgent:
         with open(self.script_path, "r") as f:
             script_data = json.load(f)
 
-        # 1. Upload reference images to OpenAI Files API
-        print("\n[OpenAI Batch] Uploading reference images...")
-        await self.file_manager.upload_all_references(
-            self.char_base_dir, self.obj_base_dir
-        )
-
-        # 2. Build batch requests for pending panels
+        # Build batch requests for pending panels
+        # Note: Batch mode uses /v1/images/generations (prompt-only) because the
+        # /v1/images/edits endpoint doesn't support file references in JSONL format.
+        # Character descriptions are embedded in prompts for consistency.
         requests: List[BatchRequest] = []
         panel_metadata: Dict[str, dict] = {}  # custom_id -> {page_num, panel_id}
 
@@ -267,45 +264,20 @@ class OpenAIPanelAgent:
                 custom_id = f"p{page_num}_panel{panel_id}"
                 prompt = self._build_panel_prompt(page_num, panel)
 
-                # Gather reference file_ids for characters in this panel
-                ref_file_ids = []
-                for char_name in panel.get("characters", []):
-                    folder_name = char_name.lower().replace(" ", "_")
-                    file_id = self.file_manager.get_file_id(folder_name)
-                    if file_id:
-                        ref_file_ids.append(file_id)
-
-                # Also check key_objects
-                for obj_name in panel.get("key_objects", []):
-                    folder_name = obj_name.lower().replace(" ", "_")
-                    file_id = self.file_manager.get_file_id(folder_name)
-                    if file_id:
-                        ref_file_ids.append(file_id)
-
-                # Build request body
-                if ref_file_ids:
-                    # Use /v1/images/edits with reference images
-                    body = {
-                        "model": config.openai_image_model_primary,
-                        "image": [{"type": "file", "file_id": fid} for fid in ref_file_ids],
-                        "prompt": prompt,
-                        "size": config.openai_panel_size,
-                        "quality": config.openai_image_quality,
-                        "response_format": "b64_json",
-                        "n": 1,
-                    }
-                    url = "/v1/images/edits"
-                else:
-                    # No refs available — use /v1/images/generations
-                    body = {
-                        "model": config.openai_image_model_primary,
-                        "prompt": prompt,
-                        "size": config.openai_panel_size,
-                        "quality": config.openai_image_quality,
-                        "response_format": "b64_json",
-                        "n": 1,
-                    }
-                    url = "/v1/images/generations"
+                # Batch mode: always use /v1/images/generations with prompt-only.
+                # Reference images via /v1/images/edits require binary uploads
+                # which aren't supported in JSONL batch format. Character descriptions
+                # are already included in the prompt by _build_panel_prompt().
+                # Sync mode (fallback + _run_sync_production) still uses /v1/images/edits
+                # with actual image bytes for better consistency.
+                body = {
+                    "model": config.openai_image_model_primary,
+                    "prompt": prompt,
+                    "size": config.openai_panel_size,
+                    "quality": config.openai_image_quality,
+                    "n": 1,
+                }
+                url = "/v1/images/generations"
 
                 requests.append(BatchRequest(
                     custom_id=custom_id,
@@ -507,7 +479,6 @@ class OpenAIPanelAgent:
                             prompt=prompt,
                             size=config.openai_panel_size,
                             quality=config.openai_image_quality,
-                            response_format="b64_json",
                             n=1,
                         )
                     else:
@@ -516,7 +487,6 @@ class OpenAIPanelAgent:
                             prompt=prompt,
                             size=config.openai_panel_size,
                             quality=config.openai_image_quality,
-                            response_format="b64_json",
                             n=1,
                         )
                     break

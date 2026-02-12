@@ -77,12 +77,13 @@ class OpenAIBatchManager:
             lines.append(json.dumps(line, separators=(",", ":")))
         return "\n".join(lines).encode("utf-8")
 
-    async def submit_batch(self, requests: List[BatchRequest]) -> str:
+    async def submit_batch(self, requests: List[BatchRequest], endpoint: str = None) -> str:
         """
         Build JSONL, upload it, and create a batch job.
 
         Args:
             requests: List of BatchRequest objects to include in the batch.
+            endpoint: Batch endpoint. If None, inferred from the first request's URL.
 
         Returns:
             The batch job ID (e.g., "batch_abc123").
@@ -90,17 +91,20 @@ class OpenAIBatchManager:
         client = get_openai_client()
         jsonl_bytes = self._build_jsonl(requests)
 
+        if endpoint is None:
+            endpoint = requests[0].url
+
         # Upload JSONL as an input file
         upload_file = await client.files.create(
             file=("batch_input.jsonl", io.BytesIO(jsonl_bytes)),
             purpose="batch",
         )
-        print(f"   Uploaded batch input file: {upload_file.id} ({len(requests)} requests)")
+        print(f"   Uploaded batch input file: {upload_file.id} ({len(requests)} requests, endpoint: {endpoint})")
 
         # Create the batch
         batch = await client.batches.create(
             input_file_id=upload_file.id,
-            endpoint="/v1/images/generations",
+            endpoint=endpoint,
             completion_window="24h",
         )
         print(f"   Created batch: {batch.id} (status: {batch.status})")
@@ -137,9 +141,12 @@ class OpenAIBatchManager:
                 completed = batch.request_counts.completed if batch.request_counts else "?"
                 failed = batch.request_counts.failed if batch.request_counts else "?"
                 print(f"   Batch {batch_id} completed: {completed} succeeded, {failed} failed")
-                if not batch.output_file_id:
-                    raise RuntimeError(f"Batch {batch_id} completed but has no output_file_id")
-                return batch.output_file_id
+                # Return output_file_id if available; fall back to error_file_id
+                if batch.output_file_id:
+                    return batch.output_file_id
+                if batch.error_file_id:
+                    return batch.error_file_id
+                raise RuntimeError(f"Batch {batch_id} completed but has no output or error file")
 
             if status in ("failed", "cancelled", "expired"):
                 errors = ""
@@ -204,6 +211,9 @@ class OpenAIBatchManager:
         """
         Full batch lifecycle: submit -> poll -> download -> return results.
 
+        Groups requests by endpoint URL and runs separate batches when needed
+        (OpenAI requires all requests in a batch to share the same endpoint).
+
         Args:
             requests: List of BatchRequest objects.
 
@@ -213,18 +223,24 @@ class OpenAIBatchManager:
         if not requests:
             return {}
 
-        print(f"\n--- OpenAI Batch: {len(requests)} requests ---")
-        batch_id = await self.submit_batch(requests)
-        output_file_id = await self.poll_until_complete(batch_id)
-        results = await self.download_results(output_file_id)
+        # Group requests by endpoint URL
+        by_endpoint: Dict[str, List[BatchRequest]] = {}
+        for req in requests:
+            by_endpoint.setdefault(req.url, []).append(req)
 
-        # Index by custom_id
-        results_map = {}
-        for result in results:
-            results_map[result.custom_id] = result
+        results_map: Dict[str, BatchResult] = {}
 
-        succeeded = sum(1 for r in results if r.success)
-        failed = len(results) - succeeded
-        print(f"   Batch complete: {succeeded} succeeded, {failed} failed")
+        for endpoint, group in by_endpoint.items():
+            print(f"\n--- OpenAI Batch: {len(group)} requests ({endpoint}) ---")
+            batch_id = await self.submit_batch(group, endpoint=endpoint)
+            output_file_id = await self.poll_until_complete(batch_id)
+            results = await self.download_results(output_file_id)
+
+            for result in results:
+                results_map[result.custom_id] = result
+
+            succeeded = sum(1 for r in results if r.success)
+            failed = len(results) - succeeded
+            print(f"   Batch complete: {succeeded} succeeded, {failed} failed")
 
         return results_map

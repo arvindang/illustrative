@@ -205,7 +205,6 @@ class OpenAIReferenceAgent:
                     "prompt": prompt,
                     "size": config.openai_ref_size,
                     "quality": config.openai_ref_image_quality,
-                    "response_format": "b64_json",
                     "n": 1,
                 },
             ))
@@ -229,7 +228,6 @@ class OpenAIReferenceAgent:
                     "prompt": prompt,
                     "size": config.openai_ref_size,
                     "quality": config.openai_ref_image_quality,
-                    "response_format": "b64_json",
                     "n": 1,
                 },
             ))
@@ -323,7 +321,6 @@ class OpenAIReferenceAgent:
                         prompt=prompt,
                         size=config.openai_ref_size,
                         quality=config.openai_ref_image_quality,
-                        response_format="b64_json",
                         n=1,
                     )
                     break
@@ -366,7 +363,6 @@ class OpenAIReferenceAgent:
                         prompt=prompt,
                         size=config.openai_ref_size,
                         quality=config.openai_ref_image_quality,
-                        response_format="b64_json",
                         n=1,
                     )
                     break
