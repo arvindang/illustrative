@@ -1,0 +1,104 @@
+/* ============================================================
+   Custom styles for Illustrative AI showcase
+   ============================================================ */
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar (dark theme) */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Pass items in the scripting agent timeline */
+.pass-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.pass-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #a5b4fc; /* indigo-300 */
+  background: rgba(99, 102, 241, 0.15);
+  border-radius: 9999px;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+/* Style cards */
+.style-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 0.75rem;
+  padding: 1rem 1.25rem;
+  transition: border-color 0.2s;
+}
+.style-card:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+/* Badges */
+.badge-validated {
+  display: inline-block;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  background: rgba(52, 211, 153, 0.15);
+  color: #6ee7b7;
+}
+.badge-experimental {
+  display: inline-block;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+}
+
+/* Scroll-triggered fade-in */
+.fade-in {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+.fade-in.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Active nav link */
+.nav-link.active {
+  color: #e2e8f0; /* slate-200 */
+}
+
+/* PDF canvas pages */
+#pdf-pages canvas {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}

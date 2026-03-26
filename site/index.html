@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Illustrative AI - Transform Literature into Graphic Novels</title>
+  <meta name="description" content="An open-source AI pipeline that transforms public domain literature into stylistically consistent graphic novels using a 7-pass enrichment pipeline and multi-model image generation.">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Illustrative AI">
+  <meta property="og:description" content="Transform literature into graphic novels with AI. Open-source 7-pass enrichment pipeline with character consistency across 100+ pages.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://arvindang.github.io/illustrative-ai/">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+
+  <link rel="stylesheet" href="css/custom.css">
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans antialiased">
+
+  <!-- ============================================================ -->
+  <!-- NAV -->
+  <!-- ============================================================ -->
+  <nav id="nav" class="fixed top-0 left-0 right-0 z-50 bg-slate-950/80 backdrop-blur-md border-b border-slate-800/50 transition-all">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
+      <a href="#hero" class="text-white font-bold text-lg tracking-tight">Illustrative AI</a>
+      <!-- Desktop links -->
+      <div class="hidden md:flex items-center gap-6 text-sm text-slate-400">
+        <a href="#gallery" class="nav-link hover:text-white transition">Gallery</a>
+        <a href="#how-it-works" class="nav-link hover:text-white transition">How It Works</a>
+        <a href="#architecture" class="nav-link hover:text-white transition">Architecture</a>
+        <a href="#styles" class="nav-link hover:text-white transition">Styles</a>
+        <a href="#paths" class="nav-link hover:text-white transition">Tech Deep Dive</a>
+        <a href="#getting-started" class="nav-link hover:text-white transition">Get Started</a>
+        <a href="https://github.com/arvindang/illustrative-ai" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-white transition">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          GitHub
+        </a>
+      </div>
+      <!-- Mobile hamburger -->
+      <button id="mobile-menu-btn" class="md:hidden p-2 text-slate-400 hover:text-white" aria-label="Open menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+    </div>
+    <!-- Mobile menu -->
+    <div id="mobile-menu" class="hidden md:hidden bg-slate-900 border-t border-slate-800 px-4 py-3">
+      <div class="flex flex-col gap-3 text-sm text-slate-400">
+        <a href="#gallery" class="mobile-nav-link hover:text-white">Gallery</a>
+        <a href="#how-it-works" class="mobile-nav-link hover:text-white">How It Works</a>
+        <a href="#architecture" class="mobile-nav-link hover:text-white">Architecture</a>
+        <a href="#styles" class="mobile-nav-link hover:text-white">Styles</a>
+        <a href="#paths" class="mobile-nav-link hover:text-white">Tech Deep Dive</a>
+        <a href="#getting-started" class="mobile-nav-link hover:text-white">Get Started</a>
+        <a href="https://github.com/arvindang/illustrative-ai" target="_blank" class="hover:text-white">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ============================================================ -->
+  <!-- HERO -->
+  <!-- ============================================================ -->
+  <section id="hero" class="pt-32 pb-20 px-4 sm:px-6">
+    <div class="max-w-4xl mx-auto text-center">
+      <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold text-white tracking-tight leading-tight">
+        Transform Literature into<br>
+        <span class="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Graphic Novels</span>
+      </h1>
+      <p class="mt-6 text-lg sm:text-xl text-slate-400 max-w-2xl mx-auto leading-relaxed">
+        An open-source AI pipeline that generates <strong class="text-slate-200">100+ page graphic novels</strong>
+        with consistent characters, dynamic layouts, and proper speech bubbles.
+        Batch-first architecture designed for long-form text adaptation.
+      </p>
+      <div class="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="https://github.com/arvindang/illustrative-ai" target="_blank"
+           class="inline-flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl transition shadow-lg shadow-indigo-600/20">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          View on GitHub
+        </a>
+        <a href="#gallery"
+           class="inline-flex items-center justify-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-xl transition border border-slate-700">
+          See Sample Output
+        </a>
+      </div>
+
+      <!-- Tech badges -->
+      <div class="mt-12 flex flex-wrap justify-center gap-3 text-xs text-slate-500">
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">Python</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">Gemini 2M Context</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">OpenAI gpt-image-1</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">7-Pass Pipeline</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">PDF / EPUB Export</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">MIT License</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- SAMPLE OUTPUT GALLERY -->
+  <!-- ============================================================ -->
+  <section id="gallery" class="py-20 px-4 sm:px-6 bg-slate-900/50">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-10">
+        <h2 class="text-3xl font-bold text-white">Sample Output</h2>
+        <p class="mt-3 text-slate-400">
+          <em>20,000 Leagues Under the Sea</em> by Jules Verne &mdash; Botanical Illustration style
+        </p>
+      </div>
+
+      <!-- PDF Viewer -->
+      <div id="pdf-viewer-container" class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+        <div id="pdf-loading" class="flex items-center justify-center py-20 text-slate-500">
+          <svg class="animate-spin w-6 h-6 mr-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          Loading sample pages...
+        </div>
+        <div id="pdf-pages" class="hidden flex flex-col items-center gap-6 py-8 px-4"></div>
+        <noscript>
+          <div class="py-12 text-center text-slate-400">
+            <p>JavaScript required to preview pages.</p>
+            <a href="samples/20K_Leagues_Under_the_Sea_test_page.pdf" class="text-indigo-400 underline">Download the PDF directly</a>
+          </div>
+        </noscript>
+      </div>
+
+      <!-- Download buttons -->
+      <div class="mt-6 flex flex-wrap justify-center gap-3">
+        <a href="samples/20K_Leagues_Under_the_Sea_test_page.pdf" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-white transition border border-slate-700">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          Download PDF
+        </a>
+        <a href="samples/20K_Leagues_Under_the_Sea_test_page.epub" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-white transition border border-slate-700">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          Download EPUB
+        </a>
+        <a href="samples/20K_Leagues_Under_the_Sea.txt" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-white transition border border-slate-700">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          Source Text (107K words)
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- HOW IT WORKS -->
+  <!-- ============================================================ -->
+  <section id="how-it-works" class="py-20 px-4 sm:px-6">
+    <div class="max-w-5xl mx-auto">
+      <h2 class="text-3xl font-bold text-white text-center">How It Works</h2>
+      <p class="mt-3 text-slate-400 text-center max-w-2xl mx-auto">Three steps from plain text to a complete graphic novel.</p>
+
+      <div class="mt-14 grid md:grid-cols-3 gap-8">
+        <!-- Step 1 -->
+        <div class="relative bg-slate-900 rounded-2xl border border-slate-800 p-6 text-center group hover:border-indigo-500/50 transition">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-indigo-600/20 text-indigo-400 font-bold text-lg mb-4">1</div>
+          <h3 class="text-lg font-semibold text-white">Upload</h3>
+          <p class="mt-2 text-sm text-slate-400 leading-relaxed">
+            Upload any public domain book as a <code class="text-xs bg-slate-800 px-1.5 py-0.5 rounded">.txt</code> file.
+            Grab one from <a href="https://www.gutenberg.org/" target="_blank" class="text-indigo-400 hover:underline">Project Gutenberg</a>.
+          </p>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="relative bg-slate-900 rounded-2xl border border-slate-800 p-6 text-center group hover:border-indigo-500/50 transition">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-indigo-600/20 text-indigo-400 font-bold text-lg mb-4">2</div>
+          <h3 class="text-lg font-semibold text-white">Customize</h3>
+          <p class="mt-2 text-sm text-slate-400 leading-relaxed">
+            Choose from 14 art styles (watercolor, manga, noir, botanical...), 14 narrative tones, page count, and era constraints.
+          </p>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="relative bg-slate-900 rounded-2xl border border-slate-800 p-6 text-center group hover:border-indigo-500/50 transition">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-indigo-600/20 text-indigo-400 font-bold text-lg mb-4">3</div>
+          <h3 class="text-lg font-semibold text-white">Generate</h3>
+          <p class="mt-2 text-sm text-slate-400 leading-relaxed">
+            The pipeline writes scripts, generates character references, illustrates panels, composes pages, and exports to PDF/EPUB.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- ARCHITECTURE DEEP DIVE -->
+  <!-- ============================================================ -->
+  <section id="architecture" class="py-20 px-4 sm:px-6 bg-slate-900/50">
+    <div class="max-w-6xl mx-auto">
+      <h2 class="text-3xl font-bold text-white text-center">Architecture</h2>
+      <p class="mt-3 text-slate-400 text-center max-w-2xl mx-auto">A 3-agent pipeline with a 7-pass scripting enrichment system.</p>
+
+      <!-- Pipeline Overview -->
+      <div class="mt-14 grid lg:grid-cols-3 gap-6">
+        <!-- Scripting Agent -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="px-6 py-4 bg-indigo-600/10 border-b border-slate-800">
+            <h3 class="font-semibold text-white flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-600 text-white text-xs font-bold">1</span>
+              Scripting Agent
+            </h3>
+            <p class="text-xs text-indigo-300/70 mt-1">7-pass enrichment pipeline</p>
+          </div>
+          <div class="px-6 py-4 space-y-3 text-sm">
+            <div class="pass-item">
+              <span class="pass-badge">0</span>
+              <div>
+                <span class="text-slate-200 font-medium">Global Context</span>
+                <p class="text-xs text-slate-500 mt-0.5">Era constraints, technology level, visual constants</p>
+              </div>
+            </div>
+            <div class="pass-item">
+              <span class="pass-badge">1</span>
+              <div>
+                <span class="text-slate-200 font-medium">Beat Analysis</span>
+                <p class="text-xs text-slate-500 mt-0.5">Intensity scores, visual potential, page-turn hooks</p>
+              </div>
+            </div>
+            <div class="pass-item">
+              <span class="pass-badge">1.5</span>
+              <div>
+                <span class="text-slate-200 font-medium">Adaptation Filter</span>
+                <p class="text-xs text-slate-500 mt-0.5">Essential / condensable / cuttable scenes</p>
+              </div>
+            </div>
+            <div class="pass-item">
+              <span class="pass-badge">2</span>
+              <div>
+                <span class="text-slate-200 font-medium">Director Pass</span>
+                <p class="text-xs text-slate-500 mt-0.5">Page blueprint, spread awareness, cliffhangers</p>
+              </div>
+            </div>
+            <div class="pass-item">
+              <span class="pass-badge">3</span>
+              <div>
+                <span class="text-slate-200 font-medium">Character Deep Dive</span>
+                <p class="text-xs text-slate-500 mt-0.5">Arc typing, voice profiles, scene-specific gear</p>
+              </div>
+            </div>
+            <div class="pass-item">
+              <span class="pass-badge">4</span>
+              <div>
+                <span class="text-slate-200 font-medium">Asset Manifest</span>
+                <p class="text-xs text-slate-500 mt-0.5">Color signatures, location palettes, color script</p>
+              </div>
+            </div>
+            <div class="pass-item">
+              <span class="pass-badge">5</span>
+              <div>
+                <span class="text-slate-200 font-medium">Scriptwriter</span>
+                <p class="text-xs text-slate-500 mt-0.5">Parallel per-page scripts with shot types, panel sizes</p>
+              </div>
+            </div>
+            <div class="pass-item">
+              <span class="pass-badge">6</span>
+              <div>
+                <span class="text-slate-200 font-medium">Validation + Auto-Fix</span>
+                <p class="text-xs text-slate-500 mt-0.5">Anachronism detection, dialogue length enforcement</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Illustrator Agent -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="px-6 py-4 bg-purple-600/10 border-b border-slate-800">
+            <h3 class="font-semibold text-white flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-purple-600 text-white text-xs font-bold">2</span>
+              Illustrator Agent
+            </h3>
+            <p class="text-xs text-purple-300/70 mt-1">Reference sheets + panel generation</p>
+          </div>
+          <div class="px-6 py-4 space-y-5 text-sm">
+            <div>
+              <h4 class="text-slate-200 font-medium">Character Reference Sheets</h4>
+              <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+                Generates visual reference images for every character <em>before</em> panel generation.
+                Multiple candidates scored by an LLM judge. Ensures consistent appearance across all panels.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">Panel Generation</h4>
+              <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+                Each panel is generated with character references passed as PIL image objects for visual consistency.
+                3-tier model fallback ensures generation completes even during outages.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">3-Tier Model Fallback</h4>
+              <div class="mt-2 space-y-1.5 text-xs">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  <span class="text-slate-400">Primary: <code class="bg-slate-800 px-1 rounded">gemini-3-pro-image</code> (4096px)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                  <span class="text-slate-400">Fallback: <code class="bg-slate-800 px-1 rounded">gemini-2.5-flash-image</code></span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-red-400"></span>
+                  <span class="text-slate-400">Last resort: <code class="bg-slate-800 px-1 rounded">gemini-2.5-flash-image</code> (1024px)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Compositor Agent -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="px-6 py-4 bg-emerald-600/10 border-b border-slate-800">
+            <h3 class="font-semibold text-white flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-emerald-600 text-white text-xs font-bold">3</span>
+              Compositor Agent
+            </h3>
+            <p class="text-xs text-emerald-300/70 mt-1">Layout, composition, and export</p>
+          </div>
+          <div class="px-6 py-4 space-y-5 text-sm">
+            <div>
+              <h4 class="text-slate-200 font-medium">Story-Aware Layouts</h4>
+              <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+                Panel grids dynamically sized based on shot type and scene importance.
+                Supports establishing shots (full width), medium shots, close-ups, and multi-panel sequences.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">Text Overlays</h4>
+              <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+                Speech bubbles and captions rendered via PIL (not baked into AI images).
+                Bubble placement uses negative space analysis to avoid covering key visual elements.
+                Multi-speaker dialogue with color-coded bubbles.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">Export</h4>
+              <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+                PDF output via ReportLab with proper page dimensions.
+                EPUB output with embedded images for e-reader compatibility.
+                Resume capability via manifest tracking.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Key Handoffs -->
+      <div class="mt-10 bg-slate-900 rounded-2xl border border-slate-800 p-6">
+        <h3 class="text-lg font-semibold text-white mb-4">Key Handoffs Between Passes</h3>
+        <div class="grid sm:grid-cols-2 gap-4 text-sm">
+          <div class="flex items-start gap-3">
+            <span class="text-indigo-400 mt-0.5">&#8594;</span>
+            <p class="text-slate-400"><strong class="text-slate-300">Beat Analysis &#8594; Director:</strong> Visual potential scores inform page allocation and splash decisions</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="text-indigo-400 mt-0.5">&#8594;</span>
+            <p class="text-slate-400"><strong class="text-slate-300">Adaptation Filter &#8594; Director:</strong> Essential/condensable guidance shapes pacing</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="text-indigo-400 mt-0.5">&#8594;</span>
+            <p class="text-slate-400"><strong class="text-slate-300">Character Arcs &#8594; Scriptwriter:</strong> Voice profiles ensure dialogue consistency</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="text-indigo-400 mt-0.5">&#8594;</span>
+            <p class="text-slate-400"><strong class="text-slate-300">Blueprint &#8594; Scriptwriter:</strong> Adjacent page context (prev/next) for continuity</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- ART STYLES & TONES -->
+  <!-- ============================================================ -->
+  <section id="styles" class="py-20 px-4 sm:px-6">
+    <div class="max-w-6xl mx-auto">
+      <h2 class="text-3xl font-bold text-white text-center">Art Styles &amp; Tones</h2>
+      <p class="mt-3 text-slate-400 text-center max-w-2xl mx-auto">14 art styles with cinematic prompt fragments, plus 14 narrative tones.</p>
+
+      <!-- Art Styles Grid -->
+      <h3 class="text-xl font-semibold text-white mt-12 mb-6">Art Styles</h3>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <!-- Validated -->
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Lush Watercolor</span>
+            <span class="badge-validated">Validated</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Soft color bleeds, visible paper texture, ethereal lighting, dreamlike quality</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Classic Comic Book</span>
+            <span class="badge-validated">Validated</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Bold outlines, flat colors, Ben-Day dots, dynamic poses, classic 4-color printing aesthetic</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Ligne Claire</span>
+            <span class="badge-validated">Validated</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Uniform line weight, flat colors, clean precise linework, Herg&eacute;/Moebius influence</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Manga / Anime</span>
+            <span class="badge-validated">Validated</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Manga panel conventions, clean black linework, dynamic angles, expressive eyes, speed lines</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Gritty Noir</span>
+            <span class="badge-validated">Validated</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Heavy shadows, high contrast, limited palette, chiaroscuro lighting, Frank Miller influence</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Botanical Illustration</span>
+            <span class="badge-validated">Validated</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Precise detail, scientific accuracy, natural color palette, fine line work, naturalist style</p>
+        </div>
+
+        <!-- Experimental -->
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Ukiyo-e Woodblock</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Flat areas of color, bold outlines, woodblock print texture, Japanese composition</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Cyberpunk Neon</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Neon lighting, dark backgrounds, holographic effects, rain-slicked surfaces</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Art Nouveau</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Flowing organic lines, decorative borders, natural motifs, Mucha-inspired</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Indian Miniature</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Flat perspective, rich colors, gold detailing, intricate patterns</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Vintage Pulp</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Dramatic lighting, saturated colors, action-oriented composition, retro aesthetic</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Sketch / Pencil</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Graphite texture, cross-hatching, visible pencil strokes, tonal gradation</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Minimalist Line Art</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Single weight lines, minimal detail, negative space, clean composition</p>
+        </div>
+        <div class="style-card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium text-white">Chiaroscuro</span>
+            <span class="badge-experimental">Experimental</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">Dramatic light-dark contrast, Caravaggio-inspired, volumetric lighting</p>
+        </div>
+      </div>
+
+      <!-- Narrative Tones -->
+      <h3 class="text-xl font-semibold text-white mt-12 mb-6">Narrative Tones</h3>
+      <div class="flex flex-wrap gap-2">
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Heroic</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Suspenseful</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Melancholic</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Whimsical</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Dark Fantasy</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Educational</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Philosophical</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Satirical</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Romantic</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Contemplative</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Tragic</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Noir Detective</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Cosmic Horror</span>
+        <span class="px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-sm text-slate-300">Gothic</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- TECH DEEP DIVE: VERTEX AI vs OPENAI -->
+  <!-- ============================================================ -->
+  <section id="paths" class="py-20 px-4 sm:px-6 bg-slate-900/50">
+    <div class="max-w-5xl mx-auto">
+      <h2 class="text-3xl font-bold text-white text-center">Paths Explored: Gemini vs OpenAI</h2>
+      <p class="mt-3 text-slate-400 text-center max-w-2xl mx-auto">
+        Two backends, different tradeoffs. Here's an honest breakdown with real numbers.
+      </p>
+
+      <div class="mt-14 grid md:grid-cols-2 gap-8">
+        <!-- Gemini Column -->
+        <div class="bg-slate-900 rounded-2xl border border-blue-500/30 overflow-hidden">
+          <div class="px-6 py-4 bg-blue-600/10 border-b border-slate-800">
+            <h3 class="font-semibold text-white">Google Gemini (Primary)</h3>
+            <p class="text-xs text-blue-300/70 mt-1">Vertex AI production backend</p>
+          </div>
+          <div class="px-6 py-5 space-y-4 text-sm">
+            <div>
+              <h4 class="text-slate-200 font-medium">Context Caching</h4>
+              <p class="text-xs text-slate-500 mt-1">
+                The full book (up to 2M tokens) is cached once. Subsequent passes get a <strong class="text-emerald-400">90% discount</strong> on input tokens.
+                For a 50K-word novel, this saves ~$0.13 per run.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">3-Tier Image Fallback</h4>
+              <p class="text-xs text-slate-500 mt-1">
+                If the primary model (gemini-3-pro) is down or quota-exhausted, the pipeline automatically falls back to flash models. No manual intervention.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">Native Multimodal</h4>
+              <p class="text-xs text-slate-500 mt-1">
+                Character reference images are passed directly as PIL objects in the same API call as the prompt. No file upload step.
+              </p>
+            </div>
+            <div class="pt-3 border-t border-slate-800">
+              <h4 class="text-slate-200 font-medium mb-2">Cost (50K-word novel, 50 pages)</h4>
+              <table class="w-full text-xs">
+                <tbody class="text-slate-400">
+                  <tr><td>Scripting (7 passes)</td><td class="text-right">$0.34</td></tr>
+                  <tr><td>Cache savings</td><td class="text-right text-emerald-400">-$0.13</td></tr>
+                  <tr><td>Images (200 panels)</td><td class="text-right">$26.80</td></tr>
+                  <tr><td>Character refs (5 chars)</td><td class="text-right">$2.01</td></tr>
+                  <tr class="text-slate-200 font-medium border-t border-slate-800"><td class="pt-2">Total</td><td class="text-right pt-2">~$29</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- OpenAI Column -->
+        <div class="bg-slate-900 rounded-2xl border border-green-500/30 overflow-hidden">
+          <div class="px-6 py-4 bg-green-600/10 border-b border-slate-800">
+            <h3 class="font-semibold text-white">OpenAI (Alternative)</h3>
+            <p class="text-xs text-green-300/70 mt-1">gpt-image-1 backend</p>
+          </div>
+          <div class="px-6 py-5 space-y-4 text-sm">
+            <div>
+              <h4 class="text-slate-200 font-medium">Batch API</h4>
+              <p class="text-xs text-slate-500 mt-1">
+                OpenAI's Batch API offers a <strong class="text-emerald-400">50% cost discount</strong> with a 24-hour SLA.
+                Ideal for non-interactive production runs where latency doesn't matter.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">File-Based References</h4>
+              <p class="text-xs text-slate-500 mt-1">
+                Character references are uploaded via OpenAI's Files API and referenced by ID.
+                Different from Gemini's inline approach, but achieves the same consistency goal.
+              </p>
+            </div>
+            <div>
+              <h4 class="text-slate-200 font-medium">Drop-In Replacement</h4>
+              <p class="text-xs text-slate-500 mt-1">
+                A factory pattern (<code class="bg-slate-800 px-1 rounded">get_image_agents()</code>) swaps the entire image pipeline by changing one config value.
+                Scripting still uses Gemini (no equivalent for 2M context caching in OpenAI).
+              </p>
+            </div>
+            <div class="pt-3 border-t border-slate-800">
+              <h4 class="text-slate-200 font-medium mb-2">Tradeoffs</h4>
+              <div class="space-y-1.5 text-xs text-slate-400">
+                <div class="flex items-start gap-2">
+                  <span class="text-emerald-400 mt-0.5">+</span>
+                  <span>50% cheaper via Batch API</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <span class="text-emerald-400 mt-0.5">+</span>
+                  <span>Different model = different failure modes (redundancy)</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <span class="text-red-400 mt-0.5">-</span>
+                  <span>24h latency for batch mode</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <span class="text-red-400 mt-0.5">-</span>
+                  <span>No context caching (scripting still on Gemini)</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <span class="text-red-400 mt-0.5">-</span>
+                  <span>File upload overhead for reference images</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Why Both -->
+      <div class="mt-8 bg-slate-900 rounded-2xl border border-slate-800 p-6 text-sm text-slate-400">
+        <h3 class="text-lg font-semibold text-white mb-3">Why Dual Backends?</h3>
+        <p class="leading-relaxed">
+          Image generation APIs have outages, quota limits, and regional availability issues.
+          During development, Gemini 3 Pro Image was often unavailable outside <code class="bg-slate-800 px-1 rounded text-xs">us-central1</code>.
+          Having OpenAI as a fallback meant production runs could continue regardless.
+          The factory pattern keeps the switching cost at zero &mdash; one config change, no code changes.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- REPOSITORY STRUCTURE -->
+  <!-- ============================================================ -->
+  <section id="repo" class="py-20 px-4 sm:px-6">
+    <div class="max-w-4xl mx-auto">
+      <h2 class="text-3xl font-bold text-white text-center">Repository Structure</h2>
+      <p class="mt-3 text-slate-400 text-center">17K+ lines of Python across a clean, modular architecture.</p>
+
+      <div class="mt-10 bg-slate-900 rounded-2xl border border-slate-800 p-6 overflow-x-auto">
+        <pre class="text-sm font-mono text-slate-400 leading-relaxed"><code>illustrative-ai/
+<span class="text-indigo-400">agents/</span>                  <span class="text-slate-600"># Core pipeline agents</span>
+  <span class="text-indigo-300">scripting/</span>             <span class="text-slate-600"># 7-pass enrichment pipeline</span>
+    passes/              <span class="text-slate-600"># Individual pass implementations</span>
+  <span class="text-indigo-300">openai/</span>                <span class="text-slate-600"># OpenAI alternative backend</span>
+  panel_agent.py         <span class="text-slate-600"># Panel image generation</span>
+  reference_agent.py     <span class="text-slate-600"># Character reference sheets</span>
+  compositor_agent.py    <span class="text-slate-600"># Page layout + text overlay</span>
+  layout_agent.py        <span class="text-slate-600"># Dynamic panel grid generation</span>
+  export_agent.py        <span class="text-slate-600"># PDF/EPUB export</span>
+<span class="text-purple-400">validators/</span>              <span class="text-slate-600"># Quality assurance</span>
+  pre_validators.py      <span class="text-slate-600"># Prompt validation (saves tokens)</span>
+  post_validators.py     <span class="text-slate-600"># Output quality checking</span>
+  consistency.py         <span class="text-slate-600"># Character consistency audit</span>
+  composition.py         <span class="text-slate-600"># Bubble placement, cropping</span>
+<span class="text-emerald-400">ui/</span>                      <span class="text-slate-600"># Streamlit interface</span>
+  pages/                 <span class="text-slate-600"># Home, auth, dashboard, generate</span>
+<span class="text-amber-400">models/</span>                  <span class="text-slate-600"># SQLAlchemy ORM models</span>
+<span class="text-amber-400">migrations/</span>              <span class="text-slate-600"># Alembic database migrations</span>
+<span class="text-amber-400">storage/</span>                 <span class="text-slate-600"># S3/bucket storage utilities</span>
+<span class="text-slate-300">tests/</span>                   <span class="text-slate-600"># 12 test files, 4K+ lines</span>
+app.py                   <span class="text-slate-600"># Streamlit entry point</span>
+production_run.py        <span class="text-slate-600"># CLI for full production runs</span>
+config.py                <span class="text-slate-600"># Centralized configuration</span>
+cost_calculator.py       <span class="text-slate-600"># Pay-per-use pricing engine</span>
+utils.py                 <span class="text-slate-600"># Retry logic, rate limiting, manifest</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- GETTING STARTED -->
+  <!-- ============================================================ -->
+  <section id="getting-started" class="py-20 px-4 sm:px-6 bg-slate-900/50">
+    <div class="max-w-4xl mx-auto">
+      <h2 class="text-3xl font-bold text-white text-center">Getting Started</h2>
+      <p class="mt-3 text-slate-400 text-center max-w-2xl mx-auto">Clone, configure, and generate your first graphic novel.</p>
+
+      <div class="mt-10 space-y-6">
+        <!-- Install -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="px-6 py-3 bg-slate-800/50 border-b border-slate-800 flex items-center justify-between">
+            <span class="text-sm font-medium text-slate-300">Installation</span>
+            <button onclick="copyCode(this)" class="text-xs text-slate-500 hover:text-white transition" data-code="git clone https://github.com/arvindang/illustrative-ai.git&#10;cd illustrative-ai&#10;python3 -m venv venv&#10;source venv/bin/activate&#10;pip install -r requirements.txt">Copy</button>
+          </div>
+          <div class="px-6 py-4">
+            <pre class="text-sm font-mono text-slate-300 leading-relaxed"><code>git clone https://github.com/arvindang/illustrative-ai.git
+cd illustrative-ai
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt</code></pre>
+          </div>
+        </div>
+
+        <!-- API Config -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="px-6 py-3 bg-slate-800/50 border-b border-slate-800">
+            <span class="text-sm font-medium text-slate-300">API Configuration (choose one)</span>
+          </div>
+          <div class="px-6 py-4 grid md:grid-cols-2 gap-6">
+            <div>
+              <h4 class="text-sm font-medium text-slate-200 mb-2">Option A: AI Studio <span class="text-xs text-slate-500">(simple, free tier)</span></h4>
+              <pre class="text-xs font-mono text-slate-400 bg-slate-800/50 rounded-lg p-3"><code># .env
+GEMINI_API_KEY=your_key_here</code></pre>
+              <p class="text-xs text-slate-500 mt-2">
+                Get a key at <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-indigo-400 hover:underline">aistudio.google.com</a>
+              </p>
+            </div>
+            <div>
+              <h4 class="text-sm font-medium text-slate-200 mb-2">Option B: Vertex AI <span class="text-xs text-slate-500">(production, no daily limits)</span></h4>
+              <pre class="text-xs font-mono text-slate-400 bg-slate-800/50 rounded-lg p-3"><code># .env
+GOOGLE_CLOUD_PROJECT=your-project
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_GENAI_USE_VERTEXAI=true</code></pre>
+              <p class="text-xs text-slate-500 mt-2">Then run: <code class="bg-slate-800 px-1 rounded">gcloud auth application-default login</code></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Run -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+          <div class="px-6 py-3 bg-slate-800/50 border-b border-slate-800">
+            <span class="text-sm font-medium text-slate-300">Run</span>
+          </div>
+          <div class="px-6 py-4 grid md:grid-cols-2 gap-6">
+            <div>
+              <h4 class="text-sm font-medium text-slate-200 mb-2">Test Mode (Streamlit UI)</h4>
+              <pre class="text-xs font-mono text-slate-400 bg-slate-800/50 rounded-lg p-3"><code>streamlit run app.py</code></pre>
+            </div>
+            <div>
+              <h4 class="text-sm font-medium text-slate-200 mb-2">Production Mode (full book)</h4>
+              <pre class="text-xs font-mono text-slate-400 bg-slate-800/50 rounded-lg p-3"><code>python production_run.py</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- FOOTER -->
+  <!-- ============================================================ -->
+  <footer class="py-12 px-4 sm:px-6 border-t border-slate-800">
+    <div class="max-w-5xl mx-auto text-center">
+      <div class="flex flex-wrap justify-center gap-3 text-xs text-slate-500 mb-6">
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">Python 3.12+</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">Gemini 2M Context</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">OpenAI gpt-image-1</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">Streamlit</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">PostgreSQL</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">ReportLab</span>
+        <span class="px-3 py-1 bg-slate-900 rounded-full border border-slate-800">MIT License</span>
+      </div>
+      <p class="text-sm text-slate-500">
+        Built by <a href="https://github.com/arvindang" target="_blank" class="text-indigo-400 hover:underline">Arvin Dang</a>
+        &middot;
+        <a href="https://github.com/arvindang/illustrative-ai" target="_blank" class="text-indigo-400 hover:underline">Source Code</a>
+        &middot;
+        <a href="https://github.com/arvindang/illustrative-ai/discussions" target="_blank" class="text-indigo-400 hover:underline">Discussions</a>
+      </p>
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="js/pdf-viewer.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
