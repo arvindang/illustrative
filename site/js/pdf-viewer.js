@@ -1,71 +1,59 @@
 /**
- * PDF.js viewer for the sample output gallery.
- * Renders all pages of the sample PDF vertically.
+ * Image carousel for the sample output gallery.
+ * Navigates 10 pre-rendered WebP page images.
  */
 (function () {
-  const PDF_URL = 'samples/20K_Leagues_Under_the_Sea_test_page.pdf';
-  const SCALE = 2.0; // Render at 2x for crisp display
+  const TOTAL_PAGES = 10;
+  let current = 1;
 
-  const loadingEl = document.getElementById('pdf-loading');
-  const pagesEl = document.getElementById('pdf-pages');
+  const img = document.getElementById('carousel-img');
+  const counter = document.getElementById('carousel-counter');
+  const prevBtn = document.getElementById('carousel-prev');
+  const nextBtn = document.getElementById('carousel-next');
 
-  // Load PDF.js from CDN
-  const script = document.createElement('script');
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs';
-  script.type = 'module';
+  if (!img || !counter) return;
 
-  // Use a module script to import and render
-  const moduleScript = document.createElement('script');
-  moduleScript.type = 'module';
-  moduleScript.textContent = `
-    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs';
+  function padPage(n) {
+    return String(n).padStart(2, '0');
+  }
 
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs';
+  function goTo(page) {
+    if (page < 1 || page > TOTAL_PAGES) return;
+    current = page;
+    img.src = 'samples/pages/page-' + padPage(current) + '.webp';
+    img.alt = 'Sample page ' + current + ' of ' + TOTAL_PAGES;
+    counter.textContent = 'Page ' + current + ' of ' + TOTAL_PAGES;
+    prevBtn.disabled = current === 1;
+    nextBtn.disabled = current === TOTAL_PAGES;
+    prevBtn.style.opacity = current === 1 ? '0.3' : '1';
+    nextBtn.style.opacity = current === TOTAL_PAGES ? '0.3' : '1';
+  }
 
-    const PDF_URL = '${PDF_URL}';
-    const SCALE = ${SCALE};
-    const loadingEl = document.getElementById('pdf-loading');
-    const pagesEl = document.getElementById('pdf-pages');
+  prevBtn.addEventListener('click', function () { goTo(current - 1); });
+  nextBtn.addEventListener('click', function () { goTo(current + 1); });
 
-    async function renderPDF() {
-      try {
-        const pdf = await pdfjsLib.getDocument(PDF_URL).promise;
-        const numPages = pdf.numPages;
+  // Keyboard navigation
+  document.addEventListener('keydown', function (e) {
+    // Only handle arrows when carousel is in viewport
+    var rect = img.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > window.innerHeight) return;
 
-        loadingEl.classList.add('hidden');
-        pagesEl.classList.remove('hidden');
+    if (e.key === 'ArrowLeft') { goTo(current - 1); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { goTo(current + 1); e.preventDefault(); }
+  });
 
-        for (let i = 1; i <= numPages; i++) {
-          const page = await pdf.getPage(i);
-          const viewport = page.getViewport({ scale: SCALE });
-
-          const canvas = document.createElement('canvas');
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
-
-          const ctx = canvas.getContext('2d');
-          await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-
-          // Page label
-          const label = document.createElement('p');
-          label.className = 'text-xs text-slate-600 mb-2';
-          label.textContent = 'Page ' + i + ' of ' + numPages;
-
-          const wrapper = document.createElement('div');
-          wrapper.className = 'flex flex-col items-center';
-          wrapper.appendChild(label);
-          wrapper.appendChild(canvas);
-
-          pagesEl.appendChild(wrapper);
-        }
-      } catch (err) {
-        console.error('PDF render error:', err);
-        loadingEl.innerHTML = '<p class="text-slate-500">Could not load PDF preview. <a href="${PDF_URL}" class="text-indigo-400 underline">Download it directly</a>.</p>';
-      }
+  // Preload adjacent pages
+  function preload(page) {
+    if (page >= 1 && page <= TOTAL_PAGES) {
+      var link = new Image();
+      link.src = 'samples/pages/page-' + padPage(page) + '.webp';
     }
+  }
 
-    renderPDF();
-  `;
+  // Preload pages 2 and 3 on load
+  preload(2);
+  preload(3);
 
-  document.head.appendChild(moduleScript);
+  // Initialize
+  goTo(1);
 })();

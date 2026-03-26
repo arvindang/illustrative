@@ -121,23 +121,43 @@
       <div class="text-center mb-10">
         <h2 class="text-3xl font-bold text-white">Sample Output</h2>
         <p class="mt-3 text-slate-400">
-          <em>20,000 Leagues Under the Sea</em> by Jules Verne &mdash; Botanical Illustration style
+          <em>20,000 Leagues Under the Sea</em> by Jules Verne &mdash; Botanical Illustration style &mdash; 10 pages
         </p>
       </div>
 
-      <!-- PDF Viewer -->
-      <div id="pdf-viewer-container" class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
-        <div id="pdf-loading" class="flex items-center justify-center py-20 text-slate-500">
-          <svg class="animate-spin w-6 h-6 mr-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-          Loading sample pages...
-        </div>
-        <div id="pdf-pages" class="hidden flex flex-col items-center gap-6 py-8 px-4"></div>
-        <noscript>
-          <div class="py-12 text-center text-slate-400">
-            <p>JavaScript required to preview pages.</p>
-            <a href="samples/20K_Leagues_Under_the_Sea_test_page.pdf" class="text-indigo-400 underline">Download the PDF directly</a>
+      <!-- Image Carousel -->
+      <div id="carousel" class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+        <div class="relative">
+          <!-- Page image -->
+          <div class="flex items-center justify-center px-4 py-6 min-h-[400px]">
+            <img id="carousel-img" src="samples/pages/page-01.webp" alt="Sample page 1 of 10"
+                 class="max-w-full max-h-[70vh] rounded-lg shadow-lg shadow-black/30">
           </div>
-        </noscript>
+
+          <!-- Prev/Next overlays -->
+          <button id="carousel-prev" aria-label="Previous page"
+                  class="absolute left-2 top-1/2 -translate-y-1/2 p-2 bg-slate-800/80 hover:bg-slate-700 rounded-full text-white transition backdrop-blur-sm">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+          </button>
+          <button id="carousel-next" aria-label="Next page"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-slate-800/80 hover:bg-slate-700 rounded-full text-white transition backdrop-blur-sm">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+
+        <!-- Page counter -->
+        <div class="flex items-center justify-center gap-3 pb-4 text-sm text-slate-500">
+          <span id="carousel-counter">Page 1 of 10</span>
+        </div>
+      </div>
+
+      <!-- Download button -->
+      <div class="mt-6 flex justify-center">
+        <a href="samples/20K_Leagues_Under_the_Sea.pdf" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm text-white font-medium transition border border-slate-700">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          Download Full PDF (10 pages)
+        </a>
       </div>
 
     </div>
