@@ -777,6 +777,8 @@ GOOGLE_GENAI_USE_VERTEXAI=true</code></pre>
         <a href="https://github.com/arvindang/illustrative" target="_blank" class="text-indigo-400 hover:underline">Source Code</a>
         &middot;
         <a href="https://github.com/arvindang/illustrative/discussions" target="_blank" class="text-indigo-400 hover:underline">Discussions</a>
+        &middot;
+        <a href="https://arv.in/privacy/" class="text-indigo-400 hover:underline">Website privacy</a>
       </p>
     </div>
   </footer>
@@ -786,7 +788,40 @@ GOOGLE_GENAI_USE_VERTEXAI=true</code></pre>
   <script src="js/main.js"></script>
 
   <!-- Analytics -->
-  <script data-goatcounter="https://arvindang.goatcounter.com/count"
-          async src="//gc.zgo.at/count.js"></script>
+<!-- arv.in analytics: keep this loader in sync with the portfolio analytics.js. -->
+<script>
+// biome-ignore lint/complexity/useArrowFunction: Preserve ES5 syntax in this shared, unbundled privacy gate.
+(function (document, window) {
+    'use strict';
+
+    // Public Web Analytics token for arv.in, not a Cloudflare API credential.
+    var siteToken = '28107c6d56504cf19b47d3d155ab30dc';
+    var productionHosts = ['arv.in', 'www.arv.in'];
+    var navigator = window.navigator;
+    var doNotTrack = navigator.doNotTrack === '1' ||
+        navigator.doNotTrack === 'yes' ||
+        window.doNotTrack === '1' ||
+        navigator.msDoNotTrack === '1';
+    var globalPrivacyControl = navigator.globalPrivacyControl === true;
+
+    // Check privacy signals before making any analytics request. File previews
+    // and other hosts stay unmeasured, even when they contain this loader.
+    if (!siteToken || productionHosts.indexOf(window.location.hostname) === -1 || doNotTrack || globalPrivacyControl) {
+        return;
+    }
+
+    if (document.querySelector('script[data-cf-beacon]')) {
+        return;
+    }
+
+    var script = document.createElement('script');
+    script.async = true;
+    script.src = 'https://static.cloudflareinsights.com/beacon.min.js';
+    // These are document-based sites. Scroll, hash, and history changes should
+    // not be counted as additional page views.
+    script.setAttribute('data-cf-beacon', JSON.stringify({ token: siteToken, spa: false }));
+    document.head.appendChild(script);
+})(document, window);
+</script>
 </body>
 </html>
